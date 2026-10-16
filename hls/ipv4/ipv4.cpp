@@ -54,7 +54,7 @@ void process_ipv4(	stream<net_axis<WIDTH> >&		dataIn,
 			{
 				std::cout << "IP HEADER: src address: " << header.getSrcAddr() << ", length: " << header.getLength() << std::endl;
 				process2dropLengthFifo.write(header.getHeaderLength() - headerWordsDropped);
-				MetaOut.write(ipv4Meta(header.getSrcAddr(), header.getLength()));
+				MetaOut.write(ipv4Meta(header.getSrcAddr(), header.getLength(), header.getECN()));
 				metaWritten = true;
 			}
 		}

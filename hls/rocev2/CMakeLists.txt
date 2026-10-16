@@ -37,6 +37,10 @@ configure_file(${CMAKE_CURRENT_SOURCE_DIR}/../udp/udp_config.hpp.in udp_config.h
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/rocev2_config.hpp.in rocev2_config.hpp)
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/make.tcl.in make.tcl)
 
+# C simulation of test_ib_transport.cpp (not part of the regular build)
+set(CSIM_MARK_CE_EVERY 0 CACHE STRING "csim: mark every Nth packet ECN CE in the simulated switch (0 = off)")
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/csim.tcl.in csim.tcl)
+
 set(HLS_DEPENDS
    ${CMAKE_CURRENT_SOURCE_DIR}/rocev2.cpp 
    ${CMAKE_CURRENT_SOURCE_DIR}/rocev2.hpp
@@ -64,3 +68,9 @@ else()
 endif()
 
 add_dependencies(services services.${PROJECT_NAME})
+
+if(VITIS_HLS_MODE STREQUAL "vitis_hls")
+   add_custom_target(csim.${PROJECT_NAME} COMMAND ${VITIS_HLS_BINARY} -f csim.tcl)
+else()
+   add_custom_target(csim.${PROJECT_NAME} COMMAND ${VITIS_HLS_BINARY} --tcl csim.tcl --mode hls)
+endif()

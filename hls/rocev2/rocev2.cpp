@@ -59,7 +59,8 @@ void rocev2(
 	ap_uint<32>& regInvalidPsnDropCount,
     ap_uint<32>& regRetransCount,
 	ap_uint<32>& regIbvCountRx,
-    ap_uint<32>& regIbvCountTx
+    ap_uint<32>& regIbvCountTx,
+    ap_uint<32>& regEcnCeRxCount
 ) {
 #pragma HLS INLINE
 
@@ -167,7 +168,8 @@ void rocev2(
 		regInvalidPsnDropCount,
         regRetransCount,
 		regIbvCountRx,
-        regIbvCountTx
+        regIbvCountTx,
+        regEcnCeRxCount
 	);
     
 }
@@ -202,7 +204,8 @@ void rocev2_top(
 	ap_uint<32>& regInvalidPsnDropCount,
     ap_uint<32>& regRetransCount,
 	ap_uint<32>& regIbvCountRx,
-    ap_uint<32>& regIbvCountTx
+    ap_uint<32>& regIbvCountTx,
+    ap_uint<32>& regEcnCeRxCount
 ) {
 	#pragma HLS DATAFLOW disable_start_propagation
 	#pragma HLS INTERFACE ap_ctrl_none port=return
@@ -288,7 +291,8 @@ void rocev2_top(
 		regInvalidPsnDropCount,
         regRetransCount,
 		regIbvCountRx,
-        regIbvCountTx
+        regIbvCountTx,
+        regEcnCeRxCount
 	);
 	
 #else
@@ -321,7 +325,8 @@ void rocev2_top(
 	ap_uint<32>& regInvalidPsnDropCount,
     ap_uint<32>& regRetransCount,
 	ap_uint<32>& regIbvCountRx,
-    ap_uint<32>& regIbvCountTx
+    ap_uint<32>& regIbvCountTx,
+    ap_uint<32>& regEcnCeRxCount
 ) {
 	#pragma HLS DATAFLOW disable_start_propagation
 	#pragma HLS INTERFACE ap_ctrl_none port=return
@@ -391,7 +396,8 @@ void rocev2_top(
 		regInvalidPsnDropCount,
         regRetransCount,
 		regIbvCountRx,
-        regIbvCountTx
+        regIbvCountTx,
+        regEcnCeRxCount
 );
 #endif
 

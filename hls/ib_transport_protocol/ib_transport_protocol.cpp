@@ -31,11 +31,13 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rocev2_config.hpp>
 #include "conn_table.hpp"
 #include "state_table.hpp"
+#include "cc_signal_table.hpp"
 #include "msn_table.hpp"
 #include "transport_timer.hpp"
 #include "retransmitter/retransmitter.hpp"
 #include "read_req_table.hpp"
 #include "multi_queue/multi_queue.hpp"
+#include "cnp_pacer.hpp"
 
 // ------------------------------------------------------------------------------------------------
 // RX path
@@ -486,7 +488,7 @@ void rx_exh_fsm(
     stream<psnPkg>&	m_axis_dbg,
 #endif
 	stream<ibhMeta>& metaIn,
-	stream<ap_uint<16> >& udpLengthFifo,
+	stream<rxIpUdpInfo>& udpLengthFifo,
 	stream<dmaState>& msnTable2rxExh_rsp,
 #ifdef RETRANS_EN
     //stream<rxReadReqUpdate>& readReqTable_upd_req,
@@ -501,9 +503,11 @@ void rx_exh_fsm(
 	stream<ackMeta>& m_axis_rx_ack_meta, 
 	stream<rxMsnReq>& rxExh2msnTable_upd_req,
 	//stream<mqPopReq>& rx_readReqAddr_pop_req,
+	stream<cnpGenReq>& rx_cnpGenReqFifo,
 	stream<ackEvent>& rx_exhEventMetaFifo,
 	stream<pkgSplit>& rx_pkgSplitTypeFifo,
-	stream<pkgShift>& rx_pkgShiftTypeFifo
+	stream<pkgShift>& rx_pkgShiftTypeFifo,
+	ap_uint<32>& regEcnCeRxCount
 ) {
 #pragma HLS inline off
 #pragma HLS pipeline II=1
@@ -515,6 +519,9 @@ void rx_exh_fsm(
 	static ExHeader<WIDTH> exHeader;
 	static dmaState dmaMeta;
 	static ap_uint<16> udpLength;
+	static ap_uint<2> ecn; // ECN field of the current packet
+	static ap_uint<32> ecnCeCount = 0;
+	rxIpUdpInfo ipUdpInfo;
 	ap_uint<32> payLoadLength;
 	static bool consumeReadInit;
 	//static rxReadReqRsp readReqMeta;
@@ -551,7 +558,19 @@ void rx_exh_fsm(
 		{
 
 			msnTable2rxExh_rsp.read(dmaMeta);
-			udpLengthFifo.read(udpLength);
+			udpLengthFifo.read(ipUdpInfo);
+			udpLength = ipUdpInfo.length;
+			ecn = ipUdpInfo.ecn;
+			if (ecn == ECN_CE)
+			{
+				ecnCeCount++;
+				regEcnCeRxCount = ecnCeCount;
+				bool isData = checkIfWrite(meta.op_code) || checkIfSend(meta.op_code) || (checkIfResponse(meta.op_code) && meta.op_code != RC_ACK);
+				if (isData && !rx_cnpGenReqFifo.full())
+					rx_cnpGenReqFifo.write(cnpGenReq(meta.dest_qp));
+
+				std::cout << "[RX EXH FSM " << INSTID << "]: CE marked packet, qpn " << std::hex << meta.dest_qp << ", psn " << meta.psn << std::dec << std::endl;
+			}
 #ifdef RETRANS_EN
 			/*if (meta.op_code == RC_ACK)
 			{
@@ -1325,6 +1344,7 @@ void tx_pkg_arbiter(
  */
 template <int INSTID = 0>
 void meta_merger(	
+	stream<cnpEvent>&	rx_cnpEventFifo,
 	stream<ackEvent>&	rx_ackEventFifo,
 	stream<event>&		rx_readEvenFifo,
 	stream<event>&		tx_appMetaFifo,
@@ -1336,11 +1356,21 @@ void meta_merger(
 #pragma HLS inline off
 #pragma HLS pipeline II=1
 
+	cnpEvent cev;
 	ackEvent aev;
 	event ev;
 	ap_uint<16> key = 0; //TODO hack
 
-	if (!rx_ackEventFifo.empty())
+	if (!rx_cnpEventFifo.empty()) {
+		rx_cnpEventFifo.read(cev);
+
+		tx_connTable_req.write(cev.qpn(15, 0));
+		// PSN set to 0 as the cnp packet is not expected by the sender
+		tx_ibhMetaFifo.write(ibhMeta(CNP, key, cev.qpn, 0, true));
+		tx_exhMetaFifo.write(event(cev));
+		std::cout << "[META MERGER " << INSTID << "]: reading from cnp event with qpn " << cev.qpn << ", psn " << 0 << std::endl;
+	}
+	else if (!rx_ackEventFifo.empty())
 	{
 		rx_ackEventFifo.read(aev);
 
@@ -1738,6 +1768,24 @@ void generate_exh(
 				}
 				break;
 			}
+			case CNP:
+			{
+				info.isAETH = false;
+				info.hasHeader = true;
+				info.hasPayload = false;
+				packetInfoFifo.write(info);
+
+				// [BTH][16 B reserved], no payload
+				sendWord.data = 0;
+				sendWord.keep(RETH_SIZE/8-1, 0) = 0xFFFF; // 16 valid bytes
+				sendWord.keep(WIDTH/8-1, (RETH_SIZE/8)) = 0;
+				sendWord.last = 1;
+
+				output.write(sendWord);
+				//BTH: 12, reserved: 16, ICRC: 4
+				lengthFifo.write(12+16+4);
+				break;
+			}
 			default:
 				break;
 			} //switch
@@ -2023,7 +2071,7 @@ void ipUdpMetaHandler(
 	stream<fwdPolicy>&			dropMetaIn,
 	//stream<dstTuple>&		output,
 	//stream<ap_uint<16> >&	remcrc_lengthFifo,
-	stream<ap_uint<16> >&	exh_lengthFifo,
+	stream<rxIpUdpInfo>&	exh_lengthFifo,
 	stream<ExHeader<WIDTH> >& exHeaderOutput
 ) {
 #pragma HLS inline off
@@ -2044,7 +2092,7 @@ void ipUdpMetaHandler(
 			if (!policy.ackOnly)
 			{
 				//remcrc_lengthFifo.write(meta.length - (8 + 12 + 4)); //UDP + BTH + CRC
-				exh_lengthFifo.write(meta.length);
+				exh_lengthFifo.write(rxIpUdpInfo(meta.length, meta.ecn));
 				exHeaderOutput.write(header);
 
 			}
@@ -2091,7 +2139,9 @@ void qp_interface(
 	stream<qpContext>& 			contextIn,
 	stream<stateTableEntry>&	stateTable2qpi_rsp,
 	stream<ifStateReq>&			qpi2stateTable_upd_req,
-	stream<ifMsnReq>&			if2msnTable_init
+	stream<ifMsnReq>&			if2msnTable_init,
+	stream<ap_uint<16>>&		qpi2ccSignalTable_init,
+	stream<ap_uint<16>>&		qpi2cnpPacer_init
 ) {
 #pragma HLS inline off
 #pragma HLS pipeline II=1
@@ -2128,6 +2178,9 @@ void qp_interface(
 				// Default case: Call both, conventional call 
 				qpi2stateTable_upd_req.write(ifStateReq(context.qp_num, context.newState, context.remote_psn, context.local_psn));
 				if2msnTable_init.write(ifMsnReq(context.qp_num, context.r_key)); //TODO store virtual address somewhere??
+				// Reset the per-QP congestion-control state on a full QP setup
+				qpi2ccSignalTable_init.write(context.qp_num);
+				qpi2cnpPacer_init.write(context.qp_num);
 			}
 
 			// qpi2stateTable_upd_req.write(ifStateReq(context.qp_num, context.newState, context.remote_psn, context.local_psn));
@@ -2222,7 +2275,8 @@ void ib_transport_protocol(
 	ap_uint<32>& regInvalidPsnDropCount,
     ap_uint<32>& regRetransCount,
 	ap_uint<32>& regIbvCountRx,
-    ap_uint<32>& regIbvCountTx
+    ap_uint<32>& regIbvCountTx,
+    ap_uint<32>& regEcnCeRxCount
 ) {
 #pragma HLS INLINE
 
@@ -2263,17 +2317,27 @@ void ib_transport_protocol(
 	#pragma HLS DATA_PACK variable=rx_pkgSplitTypeFifo
 	#pragma HLS DATA_PACK variable=rx_pkgShiftTypeFifo
 #endif 
+	static stream<cnpGenReq> rx_cnpGenReqFifo("rx_cnpGenReqFifo");
+	static stream<cnpEvent> rx_cnpEventFifo("rx_cnpEventFifo");
+	static stream<ap_uint<16>> qpi2cnpPacer_init("qpi2cnpPacer_init");
 	static stream<ackEvent>  rx_ibhEventFifo("rx_ibhEventFifo"); //TODO rename
 	static stream<ackEvent>  rx_exhEventMetaFifo("rx_exhEventMetaFifo");
 	static stream<memCmdInternal> rx_remoteMemCmd("rx_remoteMemCmd");
+	#pragma HLS STREAM depth=2 variable=rx_cnpGenReqFifo
+	#pragma HLS STREAM depth=2 variable=rx_cnpEventFifo
+	#pragma HLS STREAM depth=2 variable=qpi2cnpPacer_init
 	#pragma HLS STREAM depth=2 variable=rx_ibhEventFifo
 	#pragma HLS STREAM depth=2 variable=rx_exhEventMetaFifo
 	#pragma HLS STREAM depth=512 variable=rx_remoteMemCmd
 #if defined( __VITIS_HLS__)
+	#pragma HLS aggregate  variable=rx_cnpGenReqFifo compact=bit
+	#pragma HLS aggregate  variable=rx_cnpEventFifo compact=bit
 	#pragma HLS aggregate  variable=rx_ibhEventFifo compact=bit
 	#pragma HLS aggregate  variable=rx_exhEventMetaFifo compact=bit
 	#pragma HLS aggregate  variable=rx_remoteMemCmd compact=bit
 #else
+	#pragma HLS DATA_PACK variable=rx_cnpGenReqFifo
+	#pragma HLS DATA_PACK variable=rx_cnpEventFifo
 	#pragma HLS DATA_PACK variable=rx_ibhEventFifo
 	#pragma HLS DATA_PACK variable=rx_exhEventMetaFifo
 	#pragma HLS DATA_PACK variable=rx_remoteMemCmd
@@ -2378,6 +2442,23 @@ void ib_transport_protocol(
 	#pragma HLS DATA_PACK variable=stateTable2qpi_rsp
 #endif
 
+	//CC Signal Table Fifos
+	static stream<ccSignalReq> ccSignalTable_upd_req("ccSignalTable_upd_req");
+	static stream<ap_uint<16>> ccSignalTable_init_req("ccSignalTable_init_req");
+	static stream<ccSignalOutput> ccSignalTable_output("ccSignalTable_output");
+	#pragma HLS STREAM depth=2 variable=ccSignalTable_upd_req
+	#pragma HLS STREAM depth=2 variable=ccSignalTable_init_req
+	#pragma HLS STREAM depth=2 variable=ccSignalTable_output
+	#if defined(__VITIS_HLS__)
+		#pragma HLS aggregate variable=ccSignalTable_upd_req compact=bit
+		#pragma HLS aggregate variable=ccSignalTable_init_req compact=bit
+		#pragma HLS aggregate variable=ccSignalTable_output compact=bit
+	#else
+		#pragma HLS DATA_PACK variable=ccSignalTable_upd_req
+		#pragma HLS DATA_PACK variable=ccSignalTable_init_req
+		#pragma HLS DATA_PACK variable=ccSignalTable_output
+	#endif
+
 	// MSN Table
 	static stream<rxMsnReq>		rxExh2msnTable_upd_req("rxExh2msnTable_upd_req");
 	static stream<ap_uint<16> >	txExh2msnTable_req("txExh2msnTable_req");
@@ -2401,7 +2482,7 @@ void ib_transport_protocol(
 	#pragma HLS DATA_PACK variable=msnTable2txExh_rsp
 #endif
 
-	static stream<ap_uint<16> > exh_lengthFifo("exh_lengthFifo");
+	static stream<rxIpUdpInfo> exh_lengthFifo("exh_lengthFifo");
 	static stream<readRequest>	rx_readRequestFifo("rx_readRequestFifo");
 	static stream<event>		rx_readEvenFifo("rx_readEvenFifo");
 	static stream<ackEvent>		rx_ackEventFifo("rx_ackEventFifo");
@@ -2487,7 +2568,7 @@ void ib_transport_protocol(
 	#pragma HLS STREAM depth=2 variable=tx_dstQpFifo
 
 	// Interface
-	qp_interface<INSTID>(s_axis_qp_interface, stateTable2qpi_rsp, qpi2stateTable_upd_req, if2msnTable_init);
+	qp_interface<INSTID>(s_axis_qp_interface, stateTable2qpi_rsp, qpi2stateTable_upd_req, if2msnTable_init, ccSignalTable_init_req, qpi2cnpPacer_init);
 
 
 	// ------------------------------------------------------------------------------------------------
@@ -2582,12 +2663,14 @@ void ib_transport_protocol(
 		m_axis_rx_ack_meta,
 		rxExh2msnTable_upd_req,
 		//rx_readReqAddr_pop_req,
+		rx_cnpGenReqFifo,
 		rx_exhEventMetaFifo,
 		//rx_rethSift2mergerFifo,
 		//rx_exh2aethShiftFifo,
 		//rx_exhNoShiftFifo,
 		rx_pkgSplitTypeFifo,
-		rx_pkgShiftTypeFifo
+		rx_pkgShiftTypeFifo,
+		regEcnCeRxCount
 	);
 
 	rx_exh_payload<WIDTH, INSTID>(	
@@ -2606,6 +2689,12 @@ void ib_transport_protocol(
 		rx_readRequestFifo,
 		rx_remoteMemCmd,
 		rx_readEvenFifo
+	);
+
+	cnp_pacer<INSTID>(
+		rx_cnpGenReqFifo,
+		qpi2cnpPacer_init,
+		rx_cnpEventFifo
 	);
 
 	//TODO is order important??
@@ -2661,7 +2750,7 @@ void ib_transport_protocol(
 	stream_merger(tx_split2rethMerge, tx_appDataFifo, tx_rethMerge2rethShift);
 #endif
 	//merges and orders event going to TX path
-	meta_merger<INSTID>(rx_ackEventFifo, rx_readEvenFifo, tx_appMetaFifo, tx_ibhconnTable_req, tx_ibhMetaFifo, tx_exhMetaFifo);
+	meta_merger<INSTID>(rx_cnpEventFifo, rx_ackEventFifo, rx_readEvenFifo, tx_appMetaFifo, tx_ibhconnTable_req, tx_ibhMetaFifo, tx_exhMetaFifo);
 
 	//Shift playload by 4 bytes for AETH (data from memory)
 	lshiftWordByOctet<WIDTH,12,INSTID>(((AETH_SIZE%WIDTH)/8), tx_split2aethShift, tx_aethShift2payFifo);
@@ -2725,6 +2814,12 @@ void ib_transport_protocol(
 		stateTable2rxIbh_rsp,
 		stateTable2txIbh_rsp,
 		stateTable2qpi_rsp
+	);
+
+	cc_signal_table<INSTID>(
+		ccSignalTable_upd_req,
+		ccSignalTable_init_req,
+		ccSignalTable_output
 	);
 
 	msn_table<INSTID>(
@@ -2797,7 +2892,8 @@ template void ib_transport_protocol<DATA_WIDTH, ninst>(		   	\
 	ap_uint<32>& regInvalidPsnDropCount,		                \
     ap_uint<32>& regRetransCount,		                        \
 	ap_uint<32>& regIbvCountRx,		                       	    \
-    ap_uint<32>& regIbvCountTx		                       	    \
+    ap_uint<32>& regIbvCountTx,		                       	    \
+    ap_uint<32>& regEcnCeRxCount 		                       	    \
 );
 #else
 #define ib_transport_protocol_spec_decla(ninst)                 \
@@ -2817,7 +2913,8 @@ template void ib_transport_protocol<DATA_WIDTH, ninst>(		   	\
 	ap_uint<32>& regInvalidPsnDropCount,		                \
     ap_uint<32>& regRetransCount,		                        \
 	ap_uint<32>& regIbvCountRx,		                       	    \
-    ap_uint<32>& regIbvCountTx		                       	    \
+    ap_uint<32>& regIbvCountTx,		                       	    \
+    ap_uint<32>& regEcnCeRxCount 		                       	    \
 );
 #endif
 

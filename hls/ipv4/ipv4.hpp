@@ -35,13 +35,16 @@ struct ipv4Meta
 {
 	ap_uint<32> their_address;
 	ap_uint<16> length;
+	ap_uint<2>	ecn; // ECN field of a received packet (RX only, 0 on TX)
 	//TODO what aobut my address??
 	ipv4Meta() {}
 	ipv4Meta(ap_uint<32> addr, ap_uint<16> len)
-		:their_address(addr), length(len) {}
+		:their_address(addr), length(len), ecn(0) {}
+	ipv4Meta(ap_uint<32> addr, ap_uint<16> len, ap_uint<2> ecn)
+		:their_address(addr), length(len), ecn(ecn) {}
 	//for IPv6 TODO fix this in the future
 	ipv4Meta(ap_uint<128> addr, ap_uint<16> len)
-			:their_address(addr(127,96)), length(len) {}
+			:their_address(addr(127,96)), length(len), ecn(0) {}
 };
 
 template <int N>
@@ -589,8 +592,8 @@ void mac_finalize_ipv4_checksum(hls::stream<subSums<N> >&	subSumFiFoIn,
 /**
  * [7:4] = version;
  * [3:0] = IHL;
- * [13:8] = DSCP;
- * [15:14] = ECN;
+ * [9:8] = ECN;
+ * [15:10] = DSCP;
  * [31:16] = length;
  * [47:32] = Idendification;
  * [50:48] = Flags;
@@ -648,6 +651,12 @@ public:
 	void setECN(const ap_uint<1> ECN)
 	{
 		header[9] = ECN;
+	}
+
+	// ECN codepoints: 00 Not-ECT, 10 ECT(0), 01 ECT(1), 11 CE
+	ap_uint<2> getECN()
+	{
+		return header(9, 8);
 	}
 
 	void setProtocol(const ap_uint<8>& protocol)

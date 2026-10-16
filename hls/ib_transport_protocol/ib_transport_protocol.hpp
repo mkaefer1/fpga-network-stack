@@ -34,6 +34,7 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "../ipv6/ipv6.hpp"
 #include "../udp/udp.hpp"
 #include "rocev2_config.hpp"
+#include "cnp_pacer.hpp"
 
 using namespace hls;
 
@@ -103,10 +104,12 @@ typedef enum {
 	RC_RDMA_READ_RESP_LAST = 0x0F,
 	RC_RDMA_READ_RESP_ONLY = 0x10,
 	RC_ACK = 0x11,
+	CNP = 0x81 // No RC prefix as this is not a reliable connection opcode
 } ibOpCode;
 
 bool checkIfResponse(ibOpCode code);
 bool checkIfWrite(ibOpCode code);
+bool checkIfSend(ibOpCode code);
 bool checkIfAethHeader(ibOpCode code);
 bool checkIfRethHeader(ibOpCode code);
 
@@ -159,6 +162,18 @@ struct fwdPolicy
 	fwdPolicy(bool drop, bool ack)
 		:isDrop(drop), ackOnly(ack) {}
 };
+
+// Per-packet IP/UDP info handed from ipUdpMetaHandler to rx_exh_fsm
+struct rxIpUdpInfo
+{
+	ap_uint<16> length; // UDP length
+	ap_uint<2>	ecn;	// IP ECN field, ECN_CE if a switch marked the packet
+	rxIpUdpInfo() {}
+	rxIpUdpInfo(ap_uint<16> len, ap_uint<2> ecn)
+		:length(len), ecn(ecn) {}
+};
+
+const ap_uint<2> ECN_CE = 0x3;
 
 // TODO move to UDP/IP
 struct dstTuple
@@ -283,6 +298,8 @@ struct event
 		:op_code(op), qpn(qp), validPsn(false), isNak(false) {}
 	event(ackEvent& aev)
 		:op_code(RC_ACK), qpn(aev.qpn), psn(aev.psn), validPsn(aev.validPsn), isNak(aev.isNak) {}
+	event(cnpEvent& cev)
+		:op_code(CNP), qpn(cev.qpn), psn(0), validPsn(true), isNak(false) {}
 	/*event(ibOpCode op, ap_uint<24> qp, ap_uint<24> psn, bool nak)
 		:op_code(op), qpn(qp), psn(psn), validPsn(true), isNak(nak) {}*/
 	event(ibOpCode op, ap_uint<24> qp, ap_uint<32> len)
@@ -614,5 +631,6 @@ void ib_transport_protocol(
 	ap_uint<32>& regInvalidPsnDropCount,
     ap_uint<32>& regRetransCount,
 	ap_uint<32>& regIbvCountRx,
-    ap_uint<32>& regIbvCountTx
+    ap_uint<32>& regIbvCountTx,
+    ap_uint<32>& regEcnCeRxCount
 );

@@ -42,6 +42,12 @@ bool checkIfWrite(ibOpCode code)
 			code == RC_RDMA_WRITE_LAST  || code == RC_RDMA_WRITE_ONLY);
 }
 
+bool checkIfSend(ibOpCode code)
+{
+	return (code == RC_RDMA_READ_RESP_FIRST || code == RC_RDMA_READ_RESP_MIDDLE || 
+		code == RC_RDMA_READ_RESP_LAST || code == RC_RDMA_READ_RESP_ONLY);
+}
+
 bool checkIfAethHeader(ibOpCode code)
 {
 	return (code == RC_RDMA_READ_RESP_ONLY || code == RC_RDMA_READ_RESP_FIRST ||

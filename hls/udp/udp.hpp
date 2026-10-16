@@ -49,9 +49,12 @@ struct ipUdpMeta
 	ap_uint<16> their_port;
 	ap_uint<16> my_port;
 	ap_uint<16>	length;
+	ap_uint<2>	ecn; // ECN field of a received packet (RX only, 0 on TX)
 	ipUdpMeta() {}
 	ipUdpMeta(ap_uint<128> addr, ap_uint<16> tport, ap_uint<16> mport, ap_uint<16> len)
-		:their_address(addr), their_port(tport), my_port(mport), length(len) {}
+		:their_address(addr), their_port(tport), my_port(mport), length(len), ecn(0) {}
+	ipUdpMeta(ap_uint<128> addr, ap_uint<16> tport, ap_uint<16> mport, ap_uint<16> len, ap_uint<2> ecn)
+		:their_address(addr), their_port(tport), my_port(mport), length(len), ecn(ecn) {}
 };
 
 struct udpMeta

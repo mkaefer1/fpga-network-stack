@@ -35,6 +35,7 @@
 #include <errno.h>
 #include <fcntl.h> /* Added for the nonblocking socket */
 #include <cstdint>
+#include <cstdlib>
 
 #include "../axi_utils.hpp" //TODO why is this needed here
 #include "../ib_transport_protocol/ib_transport_protocol.hpp"
@@ -53,10 +54,14 @@ using namespace hls;
     static stream<memCmd> m_axis_mem_read_cmd_n##ninst;                  \
     static stream<net_axis<DATA_WIDTH> > m_axis_mem_write_data_n##ninst; \
     static stream<net_axis<DATA_WIDTH> > s_axis_mem_read_data_n##ninst;  \
+    static stream<psnPkg> m_axis_dbg_0_n##ninst;                         \
+    static stream<psnPkg> m_axis_dbg_1_n##ninst;                         \
+    static stream<psnPkg> m_axis_dbg_2_n##ninst;                         \
     ap_uint<32> regInvalidPsnDropCount_n##ninst;                         \
     ap_uint<32> regRetransCount_n##ninst;                                \
     ap_uint<32> regValidIbvCountRx_n##ninst;                             \
-    ap_uint<32> regValidIbvCountTx_n##ninst;
+    ap_uint<32> regValidIbvCountTx_n##ninst;                             \
+    ap_uint<32> regEcnCeRxCount_n##ninst = 0;
 
 #define IBTRUN(ninst)                               \
     ib_transport_protocol<DATA_WIDTH, ninst>(       \
@@ -72,10 +77,14 @@ using namespace hls;
         s_axis_mem_read_data_n##ninst,              \
         s_axis_qp_interface_n##ninst,               \
         s_axis_qp_conn_interface_n##ninst,          \
+        m_axis_dbg_0_n##ninst,                      \
+        m_axis_dbg_1_n##ninst,                      \
+        m_axis_dbg_2_n##ninst,                      \
         regInvalidPsnDropCount_n##ninst,            \
         regRetransCount_n##ninst,                   \
         regValidIbvCountRx_n##ninst,                \
-        regValidIbvCountTx_n##ninst                 \
+        regValidIbvCountTx_n##ninst,                \
+        regEcnCeRxCount_n##ninst                    \
     );
 
 #define SWITCHPORT(port)                                    \
@@ -84,7 +93,7 @@ using namespace hls;
     stream<ipUdpMeta> m_axis_tx_meta_n##port;               \
     stream<net_axis<DATA_WIDTH> > m_axis_tx_data_n##port;
 
-#define SWITCHRUN(dropEveryNPacket)                 \
+#define SWITCHRUN(dropEveryNPacket, markCeEveryNPacket) \
     simSwitch<DATA_WIDTH>(                          \
         s_axis_rx_meta_n0,                          \
         s_axis_rx_data_n0,                          \
@@ -96,7 +105,8 @@ using namespace hls;
         m_axis_tx_data_n1,                          \
         ipAddrN0,                                   \
         ipAddrN1,                                   \
-        dropEveryNPacket                            \
+        dropEveryNPacket,                           \
+        markCeEveryNPacket                          \
     );
 
 #define DRAMRUN(ninst)                                                                    \
@@ -131,6 +141,9 @@ if (!m_axis_rx_ack_meta_n##ninst.empty()){                                      
 
 int main(int argc, char* argv[]){
     // testSimSwitch(8); // drop one packet for every 8; 0 means no drop
+
+    // Usage: ./csim.exe [markCeEveryNPacket]  (0 = no ECN CE marking)
+    int markCeEveryNPacket = (argc > 1) ? atoi(argv[1]) : 0;
 
     // switch ports
     SWITCHPORT(0);
@@ -196,6 +209,11 @@ int main(int argc, char* argv[]){
         // s_axis_sq_meta_n0.write(txMeta(RC_SEND_LAST, 0x01, 0, 1, 0, params));
 
         s_axis_sq_meta_n0.write(txMeta(RC_RDMA_READ_REQUEST, 0x01, 0, 0, 0, 0x400, 0x500, 1 * 1024, 0));
+
+        // Single-packet WRITEs from node 0 to node 1, so the switch has data packets to mark
+        for (int w = 0; w < 8; w++) {
+            s_axis_sq_meta_n0.write(txMeta(RC_RDMA_WRITE_ONLY, 0x01, 0, 1, 0, 0x1000 + w * 0x400, 0x2000 + w * 0x400, 1 * 1024, 0));
+        }
         // s_axis_sq_meta_n0.write(txMeta(RC_RDMA_READ_REQUEST, 0x01, 0, 0, 1, params));
         // s_axis_sq_meta_n0.write(txMeta(RC_RDMA_READ_REQUEST, 0x01, 0, 1, 2, params));
     }
@@ -204,11 +222,18 @@ int main(int argc, char* argv[]){
     {
         IBTRUN(0);
         IBTRUN(1);
-        SWITCHRUN(0);
+        SWITCHRUN(0, markCeEveryNPacket);
         DRAMRUN(0);
         DRAMRUN(1);
         count++;
     }
+
+    std::cout << std::dec << std::endl
+        << "markCeEveryNPacket: " << markCeEveryNPacket << std::endl
+        << "Node 0: CE-marked packets received: " << regEcnCeRxCount_n0
+        << ", RoCE packets RX/TX: " << regValidIbvCountRx_n0 << "/" << regValidIbvCountTx_n0 << std::endl
+        << "Node 1: CE-marked packets received: " << regEcnCeRxCount_n1
+        << ", RoCE packets RX/TX: " << regValidIbvCountRx_n1 << "/" << regValidIbvCountTx_n1 << std::endl;
 
     return 0;
 }

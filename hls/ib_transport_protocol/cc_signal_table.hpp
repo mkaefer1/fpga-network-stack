@@ -61,14 +61,14 @@ template <int INSTID>
 void cc_signal_table(
     hls::stream<ccSignalReq>& ccSignalTable_upd_req,
     hls::stream<ap_uint<16>>& ccSignalTable_init_req,
-    hls::stream<ccSignalOutput> & ccSignalTable_output
+    hls::stream<ccSignalOutput>& ccSignalTable_output
 );
 
 template <int INSTID = 0>
 void cc_signal_table(
     hls::stream<ccSignalReq>& ccSignalTable_upd_req,
     hls::stream<ap_uint<16>>& ccSignalTable_init_req,
-    hls::stream<ccSignalOutput> & ccSignalTable_output
+    hls::stream<ccSignalOutput>& ccSignalTable_output
 ) {
     #pragma HLS PIPELINE II=1
     #pragma HLS INLINE off

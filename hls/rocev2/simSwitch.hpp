@@ -43,6 +43,9 @@ using namespace hls;
         cntPacketN##srcNode++;                                                  \
         if(dropEveryNPacket)                                                    \
             dropPacketN##srcNode = (cntPacketN##srcNode % dropEveryNPacket)==0; \
+        if(markCeEveryNPacket &&                                                \
+           (cntPacketN##srcNode % markCeEveryNPacket)==0)                       \
+            udpMetaN##srcNode.ecn = 0x3; /* CE */                               \
         if(dropPacketN##srcNode);                                               \
         else if(udpMetaN##srcNode.their_address==ip_address_n0)                 \
             m_axis_rx_meta_n0.write(udpMetaN##srcNode);                         \
@@ -61,6 +64,9 @@ using namespace hls;
         cntPacketN##srcNode++;                                                  \
         if(dropEveryNPacket)                                                    \
             dropPacketN##srcNode = (cntPacketN##srcNode % dropEveryNPacket)==0; \
+        if(markCeEveryNPacket &&                                                \
+           (cntPacketN##srcNode % markCeEveryNPacket)==0)                       \
+            udpMetaN##srcNode.ecn = 0x3; /* CE */                               \
         if(dropPacketN##srcNode);                                               \
         else if(udpMetaN##srcNode.their_address==ip_address_n0)                 \
             m_axis_rx_meta_n0.write(udpMetaN##srcNode);                         \
@@ -185,7 +191,8 @@ void simSwitch(
     ap_uint<128> ip_address_n3,
 #endif
 
-    ap_uint<8> dropEveryNPacket // 0 means no drop
+    ap_uint<8> dropEveryNPacket, // 0 means no drop
+    ap_uint<8> markCeEveryNPacket = 0 // 0 means no ECN CE marking
 ){
 
 #pragma HLS inline off
