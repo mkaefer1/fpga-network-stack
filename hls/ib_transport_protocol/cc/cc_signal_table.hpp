@@ -28,8 +28,8 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ************************************************/
 #pragma once
 
-#include "../axi_utils.hpp"
-#include "../ib_transport_protocol/ib_transport_protocol.hpp"
+#include "../../axi_utils.hpp"
+#include "../ib_transport_protocol.hpp"
 #include <rocev2_config.hpp> //defines MAX_QPS
 
 struct ccSignalTableEntry {
@@ -48,12 +48,12 @@ struct ccSignalReq {
         :qpn(qpn), new_cnp_count(new_cnp_count), new_latest_cnp_timestamp(new_latest_cnp_timestamp) {}
 };
 
-struct ccSignalOutput {
+struct ccSignalUpdEvent {
     ap_uint<16> qpn;
     ap_uint<32> cnp_count;
     ap_uint<32> latest_cnp_timestamp;
-    ccSignalOutput() {}
-    ccSignalOutput(ap_uint<16> qpn, ap_uint<32> cnp_count, ap_uint<32> latest_cnp_timestamp)
+    ccSignalUpdEvent() {}
+    ccSignalUpdEvent(ap_uint<16> qpn, ap_uint<32> cnp_count, ap_uint<32> latest_cnp_timestamp)
         :qpn(qpn), cnp_count(cnp_count), latest_cnp_timestamp(latest_cnp_timestamp) {}
 };
 
@@ -61,14 +61,14 @@ template <int INSTID>
 void cc_signal_table(
     hls::stream<ccSignalReq>& ccSignalTable_upd_req,
     hls::stream<ap_uint<16>>& ccSignalTable_init_req,
-    hls::stream<ccSignalOutput>& ccSignalTable_output
+    hls::stream<ccSignalUpdEvent>& ccSignalTable_upd_event
 );
 
 template <int INSTID = 0>
 void cc_signal_table(
     hls::stream<ccSignalReq>& ccSignalTable_upd_req,
     hls::stream<ap_uint<16>>& ccSignalTable_init_req,
-    hls::stream<ccSignalOutput>& ccSignalTable_output
+    hls::stream<ccSignalUpdEvent>& ccSignalTable_upd_event
 ) {
     #pragma HLS PIPELINE II=1
     #pragma HLS INLINE off
@@ -108,7 +108,7 @@ void cc_signal_table(
         cc_signal_table[ccReq.qpn] = entry;
 
         // Only output when queue is not full => otherwise this would stall the RX
-        if (!ccSignalTable_output.full())
-            ccSignalTable_output.write(ccSignalOutput(ccReq.qpn, entry.cnp_count, entry.latest_cnp_timestamp));
+        if (!ccSignalTable_upd_event.full())
+            ccSignalTable_upd_event.write(ccSignalUpdEvent(ccReq.qpn, entry.cnp_count, entry.latest_cnp_timestamp));
     }
 }

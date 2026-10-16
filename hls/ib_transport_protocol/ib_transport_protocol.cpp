@@ -31,7 +31,7 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rocev2_config.hpp>
 #include "conn_table.hpp"
 #include "state_table.hpp"
-#include "cc_signal_table.hpp"
+#include "cc/cc_unit.hpp"
 #include "msn_table.hpp"
 #include "transport_timer.hpp"
 #include "retransmitter/retransmitter.hpp"
@@ -113,7 +113,7 @@ void rx_process_exh(
 #pragma HLS inline off
 #pragma HLS pipeline II=1
 
-	enum fsmStateType {META, ACK_HEADER, RETH_HEADER, NO_HEADER};
+	enum fsmStateType {META, ACK_HEADER, RETH_HEADER, CNP_HEADER, NO_HEADER};
 
 	static fsmStateType state = META;
 
@@ -140,6 +140,10 @@ void rx_process_exh(
 			else if (checkIfRethHeader(opCode))
 			{
 				state = RETH_HEADER;
+			}
+			else if (opCode == CNP)
+			{
+				state = CNP_HEADER;
 			}
 			else
 			{
@@ -211,6 +215,22 @@ void rx_process_exh(
 			}
 		}
 		break;
+	case CNP_HEADER:
+		if (!input.empty()) {
+			// [16 B reserved]: nothing to parse, consume and don't forward
+			// (no data goes to drop_ooo_ibh, so rx_ibh_fsm writes no drop flag)
+			input.read(currWord);
+			if (!metaWritten) {
+				// rx_ibh_fsm and ipUdpMetaHandler each expect one entry per packet
+				exhMetaFifo.write(exhMeta(false));
+				metaOut.write(ExHeader<WIDTH>());
+				metaWritten = true;
+			}
+			if (currWord.last) {
+				state = META;
+			}
+		}
+		break;
 	case NO_HEADER:
 		if (!input.empty())
 		{
@@ -267,6 +287,7 @@ void rx_ibh_fsm(
 	stream<ackEvent>& ibhEventFifo,
 	stream<bool>& ibhDropFifo,
 	stream<fwdPolicy>& ibhDropMetaFifo,
+	stream<ccSignalReq>& rxIbh2ccSignalTable_upd_req,
 	//stream<ackMeta>& m_axis_rx_ack_meta,
 #ifdef RETRANS_EN
 	stream<rxTimerUpdate>&	rxClearTimer_req,
@@ -294,9 +315,20 @@ void rx_ibh_fsm(
 		{
 			metaIn.read(meta);
 			exhMetaFifo.read(emeta);
-			isResponse = checkIfResponse(meta.op_code);
-			stateTable_upd_req.write(rxStateReq(meta.dest_qp, isResponse));
-			fsmState = PROCESS;
+			if (meta.op_code == CNP) {
+				// Congestion signal for this QP (non-blocking: CC must never stall RX)
+				// MAXI_TODO: timestamp source, 0 for now
+				if (!rxIbh2ccSignalTable_upd_req.full())
+					rxIbh2ccSignalTable_upd_req.write(ccSignalReq(meta.dest_qp(15,0), 1, 0));
+				// Drop the CNP's ipUdpMeta + ExHeader in ipUdpMetaHandler.
+				// No state request, no drop flag (no data was forwarded), no PSN/retransmit/timer update.
+				ibhDropMetaFifo.write(fwdPolicy(true, false));
+			}
+			else {
+				isResponse = checkIfResponse(meta.op_code);
+				stateTable_upd_req.write(rxStateReq(meta.dest_qp, isResponse));
+				fsmState = PROCESS;
+			}
 		}
 		break;
 	case PROCESS:
@@ -938,21 +970,28 @@ void rx_exh_payload(
  * Handling of the read requests
  */
 template <int INSTID = 0>
-void handle_read_requests(	
+void handle_read_requests(
 	stream<readRequest>& requestIn,
 	stream<memCmdInternal>&	memoryReadCmd,
-	stream<event>& readEventFifo
+	stream<event>& readEventFifo,
+	stream<ap_uint<16> >& txRateTable_hrr_qpn_req, // rate lookup: "may this QP send now?"
+	stream<bool>& txRateTable_hrr_rsp
 ) {
-#pragma HLS inline off
-#pragma HLS pipeline II=1
+	#pragma HLS inline off
+	#pragma HLS pipeline II=1
 
-	enum hrr_fsmStateType {META, GENERATE};
+	// Splits a READ request into PMTU-sized READ_RESP packets. Every packet is rate limited:
+	// META:     take a request, prepare its first packet and ask the rate table
+	// RATE_RSP: allowed -> send the packet, then prepare the next one and ask again (or go back to META)
+	//           denied  -> ask again (head-of-line: everything behind waits)
+	enum hrr_fsmStateType {META, RATE_RSP};
 	static hrr_fsmStateType hrr_fsmState = META;
 	static readRequest request; //Need QP, dma_length, vaddr
-	ibOpCode readOpcode;
-	ap_uint<64> readAddr;
-	ap_uint<32> readLength;
-	ap_uint<32> dmaLength;
+	static ibOpCode readOpcode;
+	static ap_uint<64> readAddr;
+	static ap_uint<32> readLength;
+	static bool morePackets;
+	bool allowed;
 
 	switch (hrr_fsmState)
 	{
@@ -960,46 +999,66 @@ void handle_read_requests(
 		if (!requestIn.empty())
 		{
 			requestIn.read(request);
+
+			// First packet
 			readAddr = request.vaddr;
 			readLength = request.dma_length;
-			dmaLength = request.dma_length;
 			readOpcode = RC_RDMA_READ_RESP_ONLY;
+			morePackets = false;
 			if (request.dma_length > PMTU)
 			{
 				readLength = PMTU;
 				request.vaddr += PMTU;
 				request.dma_length -= PMTU;
 				readOpcode = RC_RDMA_READ_RESP_FIRST;
-				hrr_fsmState = GENERATE;
+				morePackets = true;
 			}
 
-			memoryReadCmd.write(memCmdInternal(readOpcode, request.qpn, readAddr, readLength, request.host, PKG_NR, 0));
-			readEventFifo.write(event(readOpcode, request.qpn, readLength, request.psn));
-            std::cout << "[READ_HANDLER " << INSTID << "]: read handler init packet, psn " << request.psn << std::endl;
+			txRateTable_hrr_qpn_req.write(request.qpn(15, 0));
+			hrr_fsmState = RATE_RSP;
 		}
 		break;
-	case GENERATE:
-		readAddr = request.vaddr;
-		readLength = request.dma_length;
-
-		if (request.dma_length > PMTU)
+	case RATE_RSP:
+		if (!txRateTable_hrr_rsp.empty())
 		{
-			readLength = PMTU;
-			request.vaddr += PMTU;
-			request.dma_length -= PMTU;
-			readOpcode = RC_RDMA_READ_RESP_MIDDLE;
-            std::cout << "[READ_HANDLER " << INSTID << "]: read handler middle packet, psn " << request.psn << std::endl;
-		}
-		else
-		{
-			readOpcode = RC_RDMA_READ_RESP_LAST;
-			hrr_fsmState = META;
-            std::cout << "[READ_HANDLER " << INSTID << "]: read handler last packet, psn " << request.psn << std::endl;
-		}
-		request.psn++;
-		memoryReadCmd.write(memCmdInternal(readOpcode, request.qpn, readAddr, readLength, request.host, PKG_NR, 0));
-		readEventFifo.write(event(readOpcode, request.qpn, readLength, request.psn));
+			txRateTable_hrr_rsp.read(allowed);
+			if (!allowed)
+			{
+				// Not yet: ask again for the same QP
+				txRateTable_hrr_qpn_req.write(request.qpn(15, 0));
+				break;
+			}
 
+			// Send the prepared packet
+			memoryReadCmd.write(memCmdInternal(readOpcode, request.qpn, readAddr, readLength, request.host, PKG_NR, 0));
+			readEventFifo.write(event(readOpcode, request.qpn, readLength, request.psn));
+			std::cout << "[READ_HANDLER " << INSTID << "]: read handler packet, opcode " << readOpcode << ", psn " << request.psn << std::endl;
+
+			if (morePackets)
+			{
+				// Prepare the next packet and ask again
+				request.psn++;
+				readAddr = request.vaddr;
+				readLength = request.dma_length;
+				if (request.dma_length > PMTU)
+				{
+					readLength = PMTU;
+					request.vaddr += PMTU;
+					request.dma_length -= PMTU;
+					readOpcode = RC_RDMA_READ_RESP_MIDDLE;
+				}
+				else
+				{
+					readOpcode = RC_RDMA_READ_RESP_LAST;
+					morePackets = false;
+				}
+				txRateTable_hrr_qpn_req.write(request.qpn(15, 0));
+			}
+			else
+			{
+				hrr_fsmState = META;
+			}
+		}
 		break;
 	}
 }
@@ -1092,72 +1151,127 @@ void merge_rx_pkgs(
 template <int INSTID = 0>
 void local_req_handler(
 	stream<txMeta>& s_axis_sq_meta,
-#ifdef RETRANS_EN
+	#ifdef RETRANS_EN
 	stream<retransEvent>& retransEventFifo,
 	stream<retransAddrLen>& tx2retrans_insertAddrLen,
-#endif
+	#endif
 	stream<memCmdInternal>&	tx_local_memCmdFifo, //TODO rename
 	//stream<mqInsertReq<ap_uint<64> > >&	tx_localReadAddrFifo,
 	stream<event>&tx_localTxMeta,
-    ap_uint<32>& regRetransCount)
+	stream<ap_uint<16> >& txRateTable_lrh_qpn_req, // rate lookup: "may this QP send now?"
+	stream<bool>& txRateTable_lrh_rsp,
+	ap_uint<32>& regRetransCount)
 {
-#pragma HLS inline off
-#pragma HLS pipeline II=1
+	#pragma HLS inline off
+	#pragma HLS pipeline II=1
 
-	//enum fsmStateType {META, GENERATE};
-	//static fsmStateType lrh_state;
+	// META:     take the next request (retransmissions first). Data packets (WRITE/SEND) are
+	//           rate limited: ask the rate table and wait in RATE_RSP. Everything else is sent directly.
+	// RATE_RSP: allowed -> send it, denied -> ask again (head-of-line: everything behind waits)
+	enum fsmStateType {META, RATE_RSP};
+	static fsmStateType lrh_state = META;
 	static txMeta meta;
+	static retransEvent rev;
+	static bool isRetrans = false;
 
 	event ev;
-	retransEvent rev;
-    static ap_uint<32> retransCount = 0;
+	bool sendRetrans = false;
+	bool sendNew = false;
+	bool allowed;
+	static ap_uint<32> retransCount = 0;
 
-	//switch (lrh_state)
-	//{
-	//case META:
-#ifdef RETRANS_EN
-	if (!retransEventFifo.empty())
+	switch (lrh_state)
 	{
-		retransEventFifo.read(rev);
+	case META:
+		#ifdef RETRANS_EN
+		if (!retransEventFifo.empty())
+		{
+			retransEventFifo.read(rev);
+			if (checkIfWrite(rev.op_code) || checkIfSend(rev.op_code))
+			{
+				txRateTable_lrh_qpn_req.write(rev.qpn(15, 0));
+				isRetrans = true;
+				lrh_state = RATE_RSP;
+			}
+			else
+			{
+				sendRetrans = true;
+			}
+		}
+		else if (!s_axis_sq_meta.empty())
+		#else
+		if (!s_axis_sq_meta.empty())
+		#endif
+		{
+			s_axis_sq_meta.read(meta);
+			if (checkIfWrite(meta.op_code) || checkIfSend(meta.op_code))
+			{
+				txRateTable_lrh_qpn_req.write(meta.qpn);
+				isRetrans = false;
+				lrh_state = RATE_RSP;
+			}
+			else
+			{
+				sendNew = true;
+			}
+		}
+		break;
+	case RATE_RSP:
+		if (!txRateTable_lrh_rsp.empty())
+		{
+			txRateTable_lrh_rsp.read(allowed);
+			if (allowed)
+			{
+				sendRetrans = isRetrans;
+				sendNew = !isRetrans;
+				lrh_state = META;
+			}
+			else
+			{
+				// Not yet: ask again for the same QP
+				txRateTable_lrh_qpn_req.write(isRetrans ? ap_uint<16>(rev.qpn(15, 0)) : meta.qpn);
+			}
+		}
+		break;
+	}
+
+	#ifdef RETRANS_EN
+	if (sendRetrans)
+	{
 		tx_localTxMeta.write(event(rev.op_code, rev.qpn, rev.remoteAddr, rev.length, rev.psn));
 
-        retransCount++;
-        regRetransCount = retransCount;        
+		retransCount++;
+		regRetransCount = retransCount;
 
 		std::cout << std::dec << "[LOCAL REQ HANDLER " << INSTID << "]: retransmission: length: " << rev.length << ", local addr: " << std::hex << rev.localAddr << ", remote addres: " << rev.remoteAddr << ", psn: " << rev.psn << ", op code: " << rev.op_code << ", qpn: " << rev.qpn << std::endl;
 		if (rev.op_code != RC_RDMA_READ_REQUEST)
 		{
 			std::cout << "[LOCAL REQ HANDLER " << INSTID << "]: retranmission writing into memCmd with lengh " << rev.length << std::endl;
 			tx_local_memCmdFifo.write(memCmdInternal(rev.op_code, rev.qpn, rev.localAddr, rev.length, PKG_INT, PKG_R, rev.offs));
-		} 
-
+		}
 	}
-	else if (!s_axis_sq_meta.empty())
-#else
+	#endif
 
-	if (!s_axis_sq_meta.empty())
-#endif
+	if (sendNew)
 	{
-		s_axis_sq_meta.read(meta); 
-
-		std::cout << std::dec << "[LOCAL REQ HANDLER " << INSTID << "]: opcode: " << meta.op_code << 
+		std::cout << std::dec << "[LOCAL REQ HANDLER " << INSTID << "]: opcode: " << meta.op_code <<
 			", transmission: length: " << std::dec << meta.len << ", local addr: " << std::hex << meta.laddr << ", remote addres: " << meta.raddr << ", last: " << meta.lst << std::endl;
 
-		if(meta.op_code == RC_RDMA_READ_REQUEST)
+		if (meta.op_code == RC_RDMA_READ_REQUEST)
 		{
 			tx_localTxMeta.write(event(meta.op_code, meta.qpn, meta.raddr, meta.len));
 			//tx_localReadAddrFifo.write(mqInsertReq<ap_uint<64> >(meta.qpn, meta.laddr));
 		}
-		if(meta.op_code == RC_RDMA_WRITE_MIDDLE || meta.op_code == RC_RDMA_WRITE_FIRST ||
+		if (meta.op_code == RC_RDMA_WRITE_MIDDLE || meta.op_code == RC_RDMA_WRITE_FIRST ||
 			meta.op_code == RC_RDMA_WRITE_LAST || meta.op_code == RC_RDMA_WRITE_ONLY || meta.op_code == RC_SEND_ONLY ||
-            meta.op_code == RC_SEND_FIRST || meta.op_code == RC_SEND_MIDDLE || meta.op_code == RC_SEND_LAST)
+			meta.op_code == RC_SEND_FIRST || meta.op_code == RC_SEND_MIDDLE || meta.op_code == RC_SEND_LAST)
 		{
 			tx_localTxMeta.write(event(meta.op_code, meta.qpn, meta.raddr, meta.len));
-			tx_local_memCmdFifo.write(memCmdInternal(meta.op_code, meta.qpn, meta.laddr, meta.len, meta.host, PKG_NR, meta.offs));	
+			tx_local_memCmdFifo.write(memCmdInternal(meta.op_code, meta.qpn, meta.laddr, meta.len, meta.host, PKG_NR, meta.offs));
 		}
-#ifdef RETRANS_EN
+		#ifdef RETRANS_EN
 		tx2retrans_insertAddrLen.write(retransAddrLen(meta.laddr, meta.raddr, meta.len, meta.lst, meta.offs, meta.host));
-#endif
+		#endif
 	}
 }
 
@@ -2141,6 +2255,7 @@ void qp_interface(
 	stream<ifStateReq>&			qpi2stateTable_upd_req,
 	stream<ifMsnReq>&			if2msnTable_init,
 	stream<ap_uint<16>>&		qpi2ccSignalTable_init,
+	stream<ap_uint<16>>&		qpi2txRateTable_init,
 	stream<ap_uint<16>>&		qpi2cnpPacer_init
 ) {
 #pragma HLS inline off
@@ -2180,6 +2295,7 @@ void qp_interface(
 				if2msnTable_init.write(ifMsnReq(context.qp_num, context.r_key)); //TODO store virtual address somewhere??
 				// Reset the per-QP congestion-control state on a full QP setup
 				qpi2ccSignalTable_init.write(context.qp_num);
+				qpi2txRateTable_init.write(context.qp_num);
 				qpi2cnpPacer_init.write(context.qp_num);
 			}
 
@@ -2442,21 +2558,25 @@ void ib_transport_protocol(
 	#pragma HLS DATA_PACK variable=stateTable2qpi_rsp
 #endif
 
-	//CC Signal Table Fifos
+	//CC unit Fifos (streams between the CC components are declared inside cc_unit)
 	static stream<ccSignalReq> ccSignalTable_upd_req("ccSignalTable_upd_req");
 	static stream<ap_uint<16>> ccSignalTable_init_req("ccSignalTable_init_req");
-	static stream<ccSignalOutput> ccSignalTable_output("ccSignalTable_output");
+	static stream<ap_uint<16>> txRateTable_init_req("txRateTable_init_req");
+	static stream<ap_uint<16>> txRateTable_lrh_qpn_req("txRateTable_lrh_qpn_req");
+	static stream<bool> txRateTable_lrh_rsp("txRateTable_lrh_rsp");
+	static stream<ap_uint<16>> txRateTable_hrr_qpn_req("txRateTable_hrr_qpn_req");
+	static stream<bool> txRateTable_hrr_rsp("txRateTable_hrr_rsp");
 	#pragma HLS STREAM depth=2 variable=ccSignalTable_upd_req
 	#pragma HLS STREAM depth=2 variable=ccSignalTable_init_req
-	#pragma HLS STREAM depth=2 variable=ccSignalTable_output
+	#pragma HLS STREAM depth=2 variable=txRateTable_init_req
+	#pragma HLS STREAM depth=2 variable=txRateTable_lrh_qpn_req
+	#pragma HLS STREAM depth=2 variable=txRateTable_lrh_rsp
+	#pragma HLS STREAM depth=2 variable=txRateTable_hrr_qpn_req
+	#pragma HLS STREAM depth=2 variable=txRateTable_hrr_rsp
 	#if defined(__VITIS_HLS__)
 		#pragma HLS aggregate variable=ccSignalTable_upd_req compact=bit
-		#pragma HLS aggregate variable=ccSignalTable_init_req compact=bit
-		#pragma HLS aggregate variable=ccSignalTable_output compact=bit
 	#else
 		#pragma HLS DATA_PACK variable=ccSignalTable_upd_req
-		#pragma HLS DATA_PACK variable=ccSignalTable_init_req
-		#pragma HLS DATA_PACK variable=ccSignalTable_output
 	#endif
 
 	// MSN Table
@@ -2568,7 +2688,7 @@ void ib_transport_protocol(
 	#pragma HLS STREAM depth=2 variable=tx_dstQpFifo
 
 	// Interface
-	qp_interface<INSTID>(s_axis_qp_interface, stateTable2qpi_rsp, qpi2stateTable_upd_req, if2msnTable_init, ccSignalTable_init_req, qpi2cnpPacer_init);
+	qp_interface<INSTID>(s_axis_qp_interface, stateTable2qpi_rsp, qpi2stateTable_upd_req, if2msnTable_init, ccSignalTable_init_req, txRateTable_init_req, qpi2cnpPacer_init);
 
 
 	// ------------------------------------------------------------------------------------------------
@@ -2628,6 +2748,7 @@ void ib_transport_protocol(
 		rx_ibhEventFifo,
 		rx_ibhDropFifo,
 		rx_ibhDropMetaFifo,
+		ccSignalTable_upd_req,
 		//m_axis_rx_ack_meta,
 #ifdef RETRANS_EN
 		rxClearTimer_req,
@@ -2685,10 +2806,12 @@ void ib_transport_protocol(
 		rx_exhNoShiftFifo
 	);
 
-	handle_read_requests<INSTID>(	
+	handle_read_requests<INSTID>(
 		rx_readRequestFifo,
 		rx_remoteMemCmd,
-		rx_readEvenFifo
+		rx_readEvenFifo,
+		txRateTable_hrr_qpn_req,
+		txRateTable_hrr_rsp
 	);
 
 	cnp_pacer<INSTID>(
@@ -2735,6 +2858,8 @@ void ib_transport_protocol(
 		tx_localMemCmdFifo,
 		//tx_readReqAddr_push,
 		tx_appMetaFifo,
+		txRateTable_lrh_qpn_req,
+		txRateTable_lrh_rsp,
         regRetransCount
 	);
 
@@ -2816,10 +2941,14 @@ void ib_transport_protocol(
 		stateTable2qpi_rsp
 	);
 
-	cc_signal_table<INSTID>(
+	cc_unit<INSTID>(
 		ccSignalTable_upd_req,
 		ccSignalTable_init_req,
-		ccSignalTable_output
+		txRateTable_init_req,
+		txRateTable_lrh_qpn_req,
+		txRateTable_lrh_rsp,
+		txRateTable_hrr_qpn_req,
+		txRateTable_hrr_rsp
 	);
 
 	msn_table<INSTID>(
