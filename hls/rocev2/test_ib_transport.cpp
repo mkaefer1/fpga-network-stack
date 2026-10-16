@@ -61,7 +61,13 @@ using namespace hls;
     ap_uint<32> regRetransCount_n##ninst;                                \
     ap_uint<32> regValidIbvCountRx_n##ninst;                             \
     ap_uint<32> regValidIbvCountTx_n##ninst;                             \
-    ap_uint<32> regEcnCeRxCount_n##ninst = 0;
+    ap_uint<32> regEcnCeRxCount_n##ninst = 0;                            \
+    ap_uint<32> regEcnEctRxCount_n##ninst = 0;                           \
+    ap_uint<32> regCnpTxCount_n##ninst = 0;                              \
+    ap_uint<32> regCnpRxCount_n##ninst = 0;                              \
+    ap_uint<32> regCnpRxDropCount_n##ninst = 0;                          \
+    ap_uint<32> regCcSignalInvalidCount_n##ninst = 0;                    \
+    ap_uint<32> regRateDeniedCount_n##ninst = 0;
 
 #define IBTRUN(ninst)                               \
     ib_transport_protocol<DATA_WIDTH, ninst>(       \
@@ -84,7 +90,13 @@ using namespace hls;
         regRetransCount_n##ninst,                   \
         regValidIbvCountRx_n##ninst,                \
         regValidIbvCountTx_n##ninst,                \
-        regEcnCeRxCount_n##ninst                    \
+        regEcnCeRxCount_n##ninst,                   \
+        regEcnEctRxCount_n##ninst,                  \
+        regCnpTxCount_n##ninst,                     \
+        regCnpRxCount_n##ninst,                     \
+        regCnpRxDropCount_n##ninst,                 \
+        regCcSignalInvalidCount_n##ninst,           \
+        regRateDeniedCount_n##ninst                 \
     );
 
 #define SWITCHPORT(port)                                    \
@@ -234,6 +246,14 @@ int main(int argc, char* argv[]){
         << ", RoCE packets RX/TX: " << regValidIbvCountRx_n0 << "/" << regValidIbvCountTx_n0 << std::endl
         << "Node 1: CE-marked packets received: " << regEcnCeRxCount_n1
         << ", RoCE packets RX/TX: " << regValidIbvCountRx_n1 << "/" << regValidIbvCountTx_n1 << std::endl;
+
+    // CC counters per node
+    std::cout << "Node 0: ECT rx " << regEcnEctRxCount_n0 << ", CNP tx/rx " << regCnpTxCount_n0 << "/" << regCnpRxCount_n0
+        << ", CNP rx dropped " << regCnpRxDropCount_n0 << ", CC signal invalid " << regCcSignalInvalidCount_n0
+        << ", rate denied " << regRateDeniedCount_n0 << std::endl;
+    std::cout << "Node 1: ECT rx " << regEcnEctRxCount_n1 << ", CNP tx/rx " << regCnpTxCount_n1 << "/" << regCnpRxCount_n1
+        << ", CNP rx dropped " << regCnpRxDropCount_n1 << ", CC signal invalid " << regCcSignalInvalidCount_n1
+        << ", rate denied " << regRateDeniedCount_n1 << std::endl;
 
     return 0;
 }

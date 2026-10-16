@@ -60,7 +60,13 @@ void rocev2(
     ap_uint<32>& regRetransCount,
 	ap_uint<32>& regIbvCountRx,
     ap_uint<32>& regIbvCountTx,
-    ap_uint<32>& regEcnCeRxCount
+    ap_uint<32>& regEcnCeRxCount,
+    ap_uint<32>& regEcnEctRxCount,
+    ap_uint<32>& regCnpTxCount,
+    ap_uint<32>& regCnpRxCount,
+    ap_uint<32>& regCnpRxDropCount,
+    ap_uint<32>& regCcSignalInvalidCount,
+    ap_uint<32>& regRateDeniedCount
 ) {
 #pragma HLS INLINE
 
@@ -169,7 +175,13 @@ void rocev2(
         regRetransCount,
 		regIbvCountRx,
         regIbvCountTx,
-        regEcnCeRxCount
+        regEcnCeRxCount,
+        regEcnEctRxCount,
+        regCnpTxCount,
+        regCnpRxCount,
+        regCnpRxDropCount,
+        regCcSignalInvalidCount,
+        regRateDeniedCount
 	);
     
 }
@@ -205,7 +217,13 @@ void rocev2_top(
     ap_uint<32>& regRetransCount,
 	ap_uint<32>& regIbvCountRx,
     ap_uint<32>& regIbvCountTx,
-    ap_uint<32>& regEcnCeRxCount
+    ap_uint<32>& regEcnCeRxCount,
+    ap_uint<32>& regEcnEctRxCount,
+    ap_uint<32>& regCnpTxCount,
+    ap_uint<32>& regCnpRxCount,
+    ap_uint<32>& regCnpRxDropCount,
+    ap_uint<32>& regCcSignalInvalidCount,
+    ap_uint<32>& regRateDeniedCount
 ) {
 	#pragma HLS DATAFLOW disable_start_propagation
 	#pragma HLS INTERFACE ap_ctrl_none port=return
@@ -292,7 +310,13 @@ void rocev2_top(
         regRetransCount,
 		regIbvCountRx,
         regIbvCountTx,
-        regEcnCeRxCount
+        regEcnCeRxCount,
+        regEcnEctRxCount,
+        regCnpTxCount,
+        regCnpRxCount,
+        regCnpRxDropCount,
+        regCcSignalInvalidCount,
+        regRateDeniedCount
 	);
 	
 #else
@@ -326,7 +350,13 @@ void rocev2_top(
     ap_uint<32>& regRetransCount,
 	ap_uint<32>& regIbvCountRx,
     ap_uint<32>& regIbvCountTx,
-    ap_uint<32>& regEcnCeRxCount
+    ap_uint<32>& regEcnCeRxCount,
+    ap_uint<32>& regEcnEctRxCount,
+    ap_uint<32>& regCnpTxCount,
+    ap_uint<32>& regCnpRxCount,
+    ap_uint<32>& regCnpRxDropCount,
+    ap_uint<32>& regCcSignalInvalidCount,
+    ap_uint<32>& regRateDeniedCount
 ) {
 	#pragma HLS DATAFLOW disable_start_propagation
 	#pragma HLS INTERFACE ap_ctrl_none port=return
@@ -397,7 +427,13 @@ void rocev2_top(
         regRetransCount,
 		regIbvCountRx,
         regIbvCountTx,
-        regEcnCeRxCount
+        regEcnCeRxCount,
+        regEcnEctRxCount,
+        regCnpTxCount,
+        regCnpRxCount,
+        regCnpRxDropCount,
+        regCcSignalInvalidCount,
+        regRateDeniedCount
 );
 #endif
 

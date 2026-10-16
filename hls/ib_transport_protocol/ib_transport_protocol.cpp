@@ -293,7 +293,9 @@ void rx_ibh_fsm(
 	stream<rxTimerUpdate>&	rxClearTimer_req,
 	stream<retransUpdate>&	rx2retrans_upd,
 #endif
-	ap_uint<32>&		regInvalidPsnDropCount
+	ap_uint<32>&		regInvalidPsnDropCount,
+	ap_uint<32>&		regCnpRxCount,
+	ap_uint<32>&		regCnpRxDropCount
 ) {
 #pragma HLS inline off
 #pragma HLS pipeline II=1
@@ -305,6 +307,8 @@ void rx_ibh_fsm(
 	static exhMeta emeta;
 	static bool isResponse;
 	static ap_uint<32> droppedPackets = 0;
+	static ap_uint<32> cnpRxCount = 0;
+	static ap_uint<32> cnpRxDropCount = 0;
 	rxStateRsp qpState;
 
 
@@ -318,8 +322,15 @@ void rx_ibh_fsm(
 			if (meta.op_code == CNP) {
 				// Congestion signal for this QP (non-blocking: CC must never stall RX)
 				// MAXI_TODO: timestamp source, 0 for now
-				if (!rxIbh2ccSignalTable_upd_req.full())
+				cnpRxCount++;
+				regCnpRxCount = cnpRxCount;
+				if (!rxIbh2ccSignalTable_upd_req.full()) {
 					rxIbh2ccSignalTable_upd_req.write(ccSignalReq(meta.dest_qp(15,0), 1, 0));
+				}
+				else {
+					cnpRxDropCount++;
+					regCnpRxDropCount = cnpRxDropCount;
+				}
 				// Drop the CNP's ipUdpMeta + ExHeader in ipUdpMetaHandler.
 				// No state request, no drop flag (no data was forwarded), no PSN/retransmit/timer update.
 				ibhDropMetaFifo.write(fwdPolicy(true, false));
@@ -539,7 +550,8 @@ void rx_exh_fsm(
 	stream<ackEvent>& rx_exhEventMetaFifo,
 	stream<pkgSplit>& rx_pkgSplitTypeFifo,
 	stream<pkgShift>& rx_pkgShiftTypeFifo,
-	ap_uint<32>& regEcnCeRxCount
+	ap_uint<32>& regEcnCeRxCount,
+	ap_uint<32>& regEcnEctRxCount
 ) {
 #pragma HLS inline off
 #pragma HLS pipeline II=1
@@ -553,6 +565,7 @@ void rx_exh_fsm(
 	static ap_uint<16> udpLength;
 	static ap_uint<2> ecn; // ECN field of the current packet
 	static ap_uint<32> ecnCeCount = 0;
+	static ap_uint<32> ecnEctCount = 0;
 	rxIpUdpInfo ipUdpInfo;
 	ap_uint<32> payLoadLength;
 	static bool consumeReadInit;
@@ -593,6 +606,12 @@ void rx_exh_fsm(
 			udpLengthFifo.read(ipUdpInfo);
 			udpLength = ipUdpInfo.length;
 			ecn = ipUdpInfo.ecn;
+			if (ecn != 0)
+			{
+				// ECN-capable (ECT) or CE-marked: our packets arrive with ECN intact
+				ecnEctCount++;
+				regEcnEctRxCount = ecnEctCount;
+			}
 			if (ecn == ECN_CE)
 			{
 				ecnCeCount++;
@@ -1651,11 +1670,13 @@ void generate_exh(
 	stream<ap_uint<24> >&	txSetTimer_req,
 	//stream<retransAddrLen>&		tx2retrans_insertAddrLen,
 #endif
-	stream<net_axis<WIDTH> >& output
+	stream<net_axis<WIDTH> >& output,
+	ap_uint<32>& regCnpTxCount
 ) {
 #pragma HLS inline off
 #pragma HLS pipeline II=1
 
+	static ap_uint<32> cnpTxCount = 0;
 	enum ge_fsmStateType {META, GET_MSN, PROCESS};
 	static ge_fsmStateType ge_state = META;
 	static event meta;
@@ -1898,6 +1919,8 @@ void generate_exh(
 				output.write(sendWord);
 				//BTH: 12, reserved: 16, ICRC: 4
 				lengthFifo.write(12+16+4);
+				cnpTxCount++;
+				regCnpTxCount = cnpTxCount;
 				break;
 			}
 			default:
@@ -2392,7 +2415,13 @@ void ib_transport_protocol(
     ap_uint<32>& regRetransCount,
 	ap_uint<32>& regIbvCountRx,
     ap_uint<32>& regIbvCountTx,
-    ap_uint<32>& regEcnCeRxCount
+    ap_uint<32>& regEcnCeRxCount,
+    ap_uint<32>& regEcnEctRxCount,
+    ap_uint<32>& regCnpTxCount,
+    ap_uint<32>& regCnpRxCount,
+    ap_uint<32>& regCnpRxDropCount,
+    ap_uint<32>& regCcSignalInvalidCount,
+    ap_uint<32>& regRateDeniedCount
 ) {
 #pragma HLS INLINE
 
@@ -2754,7 +2783,9 @@ void ib_transport_protocol(
 		rxClearTimer_req,
 		rx2retrans_upd,
 #endif
-		regInvalidPsnDropCount
+		regInvalidPsnDropCount,
+		regCnpRxCount,
+		regCnpRxDropCount
 	);
 
 	drop_ooo_ibh<WIDTH, INSTID>(
@@ -2791,7 +2822,8 @@ void ib_transport_protocol(
 		//rx_exhNoShiftFifo,
 		rx_pkgSplitTypeFifo,
 		rx_pkgShiftTypeFifo,
-		regEcnCeRxCount
+		regEcnCeRxCount,
+		regEcnEctRxCount
 	);
 
 	rx_exh_payload<WIDTH, INSTID>(	
@@ -2893,7 +2925,8 @@ void ib_transport_protocol(
 #ifdef RETRANS_EN
 		txSetTimer_req,
 #endif
-		tx_exh2payFifo
+		tx_exh2payFifo,
+		regCnpTxCount
 	);
 
 	// Append payload to AETH or RETH
@@ -2948,7 +2981,9 @@ void ib_transport_protocol(
 		txRateTable_lrh_qpn_req,
 		txRateTable_lrh_rsp,
 		txRateTable_hrr_qpn_req,
-		txRateTable_hrr_rsp
+		txRateTable_hrr_rsp,
+		regCcSignalInvalidCount,
+		regRateDeniedCount
 	);
 
 	msn_table<INSTID>(
@@ -3022,7 +3057,13 @@ template void ib_transport_protocol<DATA_WIDTH, ninst>(		   	\
     ap_uint<32>& regRetransCount,		                        \
 	ap_uint<32>& regIbvCountRx,		                       	    \
     ap_uint<32>& regIbvCountTx,		                       	    \
-    ap_uint<32>& regEcnCeRxCount 		                       	    \
+    ap_uint<32>& regEcnCeRxCount,		                       	    \
+    ap_uint<32>& regEcnEctRxCount,		                       	    \
+    ap_uint<32>& regCnpTxCount,		                       	    \
+    ap_uint<32>& regCnpRxCount,		                       	    \
+    ap_uint<32>& regCnpRxDropCount,		                       	    \
+    ap_uint<32>& regCcSignalInvalidCount,		                    \
+    ap_uint<32>& regRateDeniedCount		                       	    \
 );
 #else
 #define ib_transport_protocol_spec_decla(ninst)                 \
@@ -3043,7 +3084,13 @@ template void ib_transport_protocol<DATA_WIDTH, ninst>(		   	\
     ap_uint<32>& regRetransCount,		                        \
 	ap_uint<32>& regIbvCountRx,		                       	    \
     ap_uint<32>& regIbvCountTx,		                       	    \
-    ap_uint<32>& regEcnCeRxCount 		                       	    \
+    ap_uint<32>& regEcnCeRxCount,		                       	    \
+    ap_uint<32>& regEcnEctRxCount,		                       	    \
+    ap_uint<32>& regCnpTxCount,		                       	    \
+    ap_uint<32>& regCnpRxCount,		                       	    \
+    ap_uint<32>& regCnpRxDropCount,		                       	    \
+    ap_uint<32>& regCcSignalInvalidCount,		                    \
+    ap_uint<32>& regRateDeniedCount		                       	    \
 );
 #endif
 

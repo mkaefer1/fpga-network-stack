@@ -49,7 +49,8 @@ void tx_rate_table(
     hls::stream<ap_uint<16>>& txRateTable_lrh_qpn_req,
     hls::stream<bool>& txRateTable_lrh_rsp,
     hls::stream<ap_uint<16>>& txRateTable_hrr_qpn_req,
-    hls::stream<bool>& txRateTable_hrr_rsp
+    hls::stream<bool>& txRateTable_hrr_rsp,
+    ap_uint<32>& regRateDeniedCount // lookups answered "denied" (0 with the identity module)
 );
 
 /**
@@ -67,7 +68,8 @@ void tx_rate_table(
     hls::stream<ap_uint<16>>& txRateTable_lrh_qpn_req,
     hls::stream<bool>& txRateTable_lrh_rsp,
     hls::stream<ap_uint<16>>& txRateTable_hrr_qpn_req,
-    hls::stream<bool>& txRateTable_hrr_rsp
+    hls::stream<bool>& txRateTable_hrr_rsp,
+    ap_uint<32>& regRateDeniedCount // lookups answered "denied" (0 with the identity module)
 ) {
     #pragma HLS INLINE off
     #pragma HLS PIPELINE II=1
@@ -91,6 +93,7 @@ void tx_rate_table(
     // Alternate between the two clients when both ask, so a client that keeps getting
     // denied (and keeps asking) cannot starve the other one
     static bool lastWasHrr = true;
+    static ap_uint<32> deniedCount = 0;
 
     // Init is rare, so it goes first and cannot be starved by updates or lookups
     if (!txRateTable_init_req.empty()) {
@@ -123,6 +126,10 @@ void tx_rate_table(
             txRateEntry entry = tx_rate_table[qpn_req];
             // Gap only: gap > 0 means "denied" (the requester keeps asking) until send-time tracking is enabled
             allowed = (entry.gap == 0);
+            if (!allowed) {
+                deniedCount++;
+                regRateDeniedCount = deniedCount;
+            }
 
             // Read => Modify => Write
             // ap_uint<32> elapsed = now - entry.last_send_ts; // wrap-safe difference

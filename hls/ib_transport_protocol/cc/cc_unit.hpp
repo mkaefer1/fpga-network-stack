@@ -53,7 +53,9 @@ void cc_unit(
     hls::stream<ap_uint<16> >& txRateTable_lrh_qpn_req,  // in:  rate lookup (local_req_handler)
     hls::stream<bool>& txRateTable_lrh_rsp,              // out: rate lookup response (true = may send now)
     hls::stream<ap_uint<16> >& txRateTable_hrr_qpn_req,  // in:  rate lookup (handle_read_requests)
-    hls::stream<bool>& txRateTable_hrr_rsp               // out: rate lookup response (true = may send now)
+    hls::stream<bool>& txRateTable_hrr_rsp,              // out: rate lookup response (true = may send now)
+    ap_uint<32>& regCcSignalInvalidCount,                // out: counter, signals dropped (QP invalid)
+    ap_uint<32>& regRateDeniedCount                      // out: counter, rate lookups answered "denied"
 ) {
     #pragma HLS INLINE
 
@@ -73,7 +75,8 @@ void cc_unit(
     cc_signal_table<INSTID>(
         ccSignalTable_upd_req,
         ccSignalTable_init_req,
-        ccSignalTable_upd_event
+        ccSignalTable_upd_event,
+        regCcSignalInvalidCount
     );
 
     identity_cc_module<INSTID>(
@@ -87,6 +90,7 @@ void cc_unit(
         txRateTable_lrh_qpn_req,
         txRateTable_lrh_rsp,
         txRateTable_hrr_qpn_req,
-        txRateTable_hrr_rsp
+        txRateTable_hrr_rsp,
+        regRateDeniedCount
     );
 }

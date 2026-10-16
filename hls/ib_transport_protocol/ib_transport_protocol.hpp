@@ -632,5 +632,11 @@ void ib_transport_protocol(
     ap_uint<32>& regRetransCount,
 	ap_uint<32>& regIbvCountRx,
     ap_uint<32>& regIbvCountTx,
-    ap_uint<32>& regEcnCeRxCount
+    ap_uint<32>& regEcnCeRxCount,
+    ap_uint<32>& regEcnEctRxCount,
+    ap_uint<32>& regCnpTxCount,
+    ap_uint<32>& regCnpRxCount,
+    ap_uint<32>& regCnpRxDropCount,
+    ap_uint<32>& regCcSignalInvalidCount,
+    ap_uint<32>& regRateDeniedCount
 );

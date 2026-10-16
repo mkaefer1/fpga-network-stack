@@ -61,20 +61,23 @@ template <int INSTID>
 void cc_signal_table(
     hls::stream<ccSignalReq>& ccSignalTable_upd_req,
     hls::stream<ap_uint<16>>& ccSignalTable_init_req,
-    hls::stream<ccSignalUpdEvent>& ccSignalTable_upd_event
+    hls::stream<ccSignalUpdEvent>& ccSignalTable_upd_event,
+    ap_uint<32>& regCcSignalInvalidCount // signals dropped: QP out of range or not initialized
 );
 
 template <int INSTID = 0>
 void cc_signal_table(
     hls::stream<ccSignalReq>& ccSignalTable_upd_req,
     hls::stream<ap_uint<16>>& ccSignalTable_init_req,
-    hls::stream<ccSignalUpdEvent>& ccSignalTable_upd_event
+    hls::stream<ccSignalUpdEvent>& ccSignalTable_upd_event,
+    ap_uint<32>& regCcSignalInvalidCount // signals dropped: QP out of range or not initialized
 ) {
     #pragma HLS PIPELINE II=1
     #pragma HLS INLINE off
 
     // The actual array that stores the entries
     static ccSignalTableEntry cc_signal_table[MAX_QPS];
+    static ap_uint<32> invalidCount = 0;
 
     #if defined(__VITIS_HLS__)
         #pragma HLS bind_storage variable=cc_signal_table type=RAM_2P impl=BRAM
@@ -98,11 +101,19 @@ void cc_signal_table(
     }
     else if (!ccSignalTable_upd_req.empty()) {
         ccSignalTable_upd_req.read(ccReq);
-        if (ccReq.qpn >= MAX_QPS) return;
+        if (ccReq.qpn >= MAX_QPS) {
+            invalidCount++;
+            regCcSignalInvalidCount = invalidCount;
+            return;
+        }
 
         // Read => Modify => Write
         ccSignalTableEntry entry = cc_signal_table[ccReq.qpn];
-        if (!entry.valid) return; // Drop updates for uninitialized entries
+        if (!entry.valid) { // Drop updates for uninitialized entries
+            invalidCount++;
+            regCcSignalInvalidCount = invalidCount;
+            return;
+        }
         entry.cnp_count += ccReq.new_cnp_count;
         entry.latest_cnp_timestamp = ccReq.new_latest_cnp_timestamp;
         cc_signal_table[ccReq.qpn] = entry;
