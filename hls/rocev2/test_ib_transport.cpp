@@ -83,6 +83,7 @@ using namespace hls;
         s_axis_mem_read_data_n##ninst,              \
         s_axis_qp_interface_n##ninst,               \
         s_axis_qp_conn_interface_n##ninst,          \
+        cycle_cnt,                                  \
         m_axis_dbg_0_n##ninst,                      \
         m_axis_dbg_1_n##ninst,                      \
         m_axis_dbg_2_n##ninst,                      \
@@ -199,12 +200,16 @@ int main(int argc, char* argv[]){
     s_axis_qp_conn_interface_n0.write(connInfoN0);
     s_axis_qp_conn_interface_n1.write(connInfoN1);
 
+    // Stands in for the free-running cycle counter in roce_stack.sv: one simulation step = one cycle, shared by both nodes
+    ap_uint<32> cycle_cnt = 0;
+
     int count = 0;
     //Make sure it is initialized
     while (count < 10)
     {
         IBTRUN(0);
         IBTRUN(1);
+        cycle_cnt++;
         count++;
     }
 
@@ -237,6 +242,7 @@ int main(int argc, char* argv[]){
         SWITCHRUN(0, markCeEveryNPacket);
         DRAMRUN(0);
         DRAMRUN(1);
+        cycle_cnt++;
         count++;
     }
 

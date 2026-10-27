@@ -2404,6 +2404,7 @@ void ib_transport_protocol(
 	// QP
 	stream<qpContext>& s_axis_qp_interface,
 	stream<ifConnReq>& s_axis_qp_conn_interface,
+	volatile ap_uint<32>& cycle_cnt,
 
 	// Debug
 #ifdef DBG_IBV
@@ -2849,7 +2850,8 @@ void ib_transport_protocol(
 	cnp_pacer<INSTID>(
 		rx_cnpGenReqFifo,
 		qpi2cnpPacer_init,
-		rx_cnpEventFifo
+		rx_cnpEventFifo,
+		cycle_cnt
 	);
 
 	//TODO is order important??
@@ -3050,6 +3052,7 @@ template void ib_transport_protocol<DATA_WIDTH, ninst>(		   	\
 	stream<net_axis<DATA_WIDTH> >& s_axis_mem_read_data,		\
 	stream<qpContext>& s_axis_qp_interface,		               	\
 	stream<ifConnReq>& s_axis_qp_conn_interface,		        \
+	volatile ap_uint<32>& cycle_cnt,		                    \
 	stream<psnPkg>& m_axis_dbg_0,		                        \
     stream<psnPkg>& m_axis_dbg_1,		                        \
     stream<psnPkg>& m_axis_dbg_2,		                        \
@@ -3080,6 +3083,7 @@ template void ib_transport_protocol<DATA_WIDTH, ninst>(		   	\
 	stream<net_axis<DATA_WIDTH> >& s_axis_mem_read_data,		\
 	stream<qpContext>& s_axis_qp_interface,		               	\
 	stream<ifConnReq>& s_axis_qp_conn_interface,		        \
+	volatile ap_uint<32>& cycle_cnt,		                    \
 	ap_uint<32>& regInvalidPsnDropCount,		                \
     ap_uint<32>& regRetransCount,		                        \
 	ap_uint<32>& regIbvCountRx,		                       	    \

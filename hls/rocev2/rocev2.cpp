@@ -48,6 +48,7 @@ void rocev2(
 	hls::stream<qpContext>&	s_axis_qp_interface,
 	hls::stream<ifConnReq>&	s_axis_qp_conn_interface,
 	ap_uint<128> local_ip_address,
+	volatile ap_uint<32>& cycle_cnt,
 
 	//Debug output
 #ifdef DBG_IBV
@@ -166,6 +167,7 @@ void rocev2(
 		s_axis_mem_read_data,
 		s_axis_qp_interface,
 		s_axis_qp_conn_interface,
+		cycle_cnt,
 #ifdef DBG_IBV
 		m_axis_dbg_0,
 		m_axis_dbg_1,
@@ -205,6 +207,7 @@ void rocev2_top(
 	stream<qpContext>& s_axis_qp_interface,
 	stream<ifConnReq>& s_axis_qp_conn_interface,
 	ap_uint<128> local_ip_address,
+	volatile ap_uint<32>& cycle_cnt,
 
 	//Debug output
 #ifdef DBG_IBV
@@ -255,6 +258,7 @@ void rocev2_top(
 	#pragma HLS aggregate  variable=s_axis_qp_conn_interface compact=bit
 
 	#pragma HLS INTERFACE ap_none register port=local_ip_address
+	#pragma HLS INTERFACE ap_none register port=cycle_cnt
 
 	//DEBUG
 #ifdef DBG_IBV
@@ -299,6 +303,7 @@ void rocev2_top(
 		s_axis_qp_interface,
 		s_axis_qp_conn_interface,
 		local_ip_address,
+		cycle_cnt,
 
 #ifdef DBG_IBV
 		m_axis_dbg_0,
@@ -338,6 +343,7 @@ void rocev2_top(
 	stream<qpContext>& s_axis_qp_interface,
 	stream<ifConnReq>& s_axis_qp_conn_interface,
 	ap_uint<128> local_ip_address,
+	volatile ap_uint<32>& cycle_cnt,
 
 	//Debug output
 #ifdef DBG_IBV
@@ -388,6 +394,7 @@ void rocev2_top(
 	#pragma HLS DATA_PACK variable=s_axis_qp_conn_interface
 
 	#pragma HLS INTERFACE ap_none register port=local_ip_address
+	#pragma HLS INTERFACE ap_none register port=cycle_cnt
 
 	//DEBUG
 #ifdef DBG_IBV
@@ -416,6 +423,7 @@ void rocev2_top(
 		s_axis_qp_interface,
 		s_axis_qp_conn_interface,
 		local_ip_address,
+		cycle_cnt,
 
 #ifdef DBG_IBV
 		m_axis_dbg_0,

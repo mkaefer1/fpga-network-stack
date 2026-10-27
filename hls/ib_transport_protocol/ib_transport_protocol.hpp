@@ -621,6 +621,7 @@ void ib_transport_protocol(
 	// QP
 	hls::stream<qpContext>&	s_axis_qp_interface,
 	hls::stream<ifConnReq>&	s_axis_qp_conn_interface,
+	volatile ap_uint<32>& cycle_cnt,
 
 	// Debug
 #ifdef DBG_IBV
