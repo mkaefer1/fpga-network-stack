@@ -32,6 +32,7 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "cc_signal_table.hpp"
 #include "tx_rate_table.hpp"
 #include "cc_modules/identity.hpp"
+#include "cc_modules/dcqcn.hpp"
 
 /**
  * Congestion-control unit: groups the CC components behind one call.
@@ -42,20 +43,22 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  * are declared here.
  *
  *   ccSignalTable_upd_req  ─┐
- *   ccSignalTable_init_req ─┴→ cc_signal_table ─→ identity_cc_module ─→ tx_rate_table ⇄ txRateTable_lrh_qpn_req / txRateTable_lrh_rsp (local_req_handler)
- *                                                     txRateTable_init_req ─┘    ⇄ txRateTable_hrr_qpn_req / txRateTable_hrr_rsp (handle_read_requests)
+ *   ccSignalTable_init_req ─┴→ cc_signal_table ─→ dcqcn_cc_module ─→ tx_rate_table ⇄ txRateTable_lrh_qpn_req / txRateTable_lrh_rsp (local_req_handler)
+ *                                  dcqcn_init_req ─┘       txRateTable_init_req ─┘    ⇄ txRateTable_hrr_qpn_req / txRateTable_hrr_rsp (handle_read_requests)
  */
 template <int INSTID = 0>
 void cc_unit(
     hls::stream<ccSignalReq>& ccSignalTable_upd_req,     // in:  congestion signals (e.g. CNPs from rx_ibh_fsm)
     hls::stream<ap_uint<16> >& ccSignalTable_init_req,   // in:  QP setup from qp_interface
     hls::stream<ap_uint<16> >& txRateTable_init_req,     // in:  QP setup from qp_interface
+    hls::stream<ap_uint<16> >& dcqcn_init_req,           // in:  QP setup from qp_interface
     hls::stream<ap_uint<16> >& txRateTable_lrh_qpn_req,  // in:  rate lookup (local_req_handler)
     hls::stream<bool>& txRateTable_lrh_rsp,              // out: rate lookup response (true = may send now)
     hls::stream<ap_uint<16> >& txRateTable_hrr_qpn_req,  // in:  rate lookup (handle_read_requests)
     hls::stream<bool>& txRateTable_hrr_rsp,              // out: rate lookup response (true = may send now)
     ap_uint<32>& regCcSignalInvalidCount,                // out: counter, signals dropped (QP invalid)
-    ap_uint<32>& regRateDeniedCount                      // out: counter, rate lookups answered "denied"
+    ap_uint<32>& regRateDeniedCount,                     // out: counter, rate lookups answered "denied"
+    volatile ap_uint<32>& cycle_cnt                      // in:  free-running cycle counter (nclk)
 ) {
     #pragma HLS INLINE
 
@@ -79,9 +82,11 @@ void cc_unit(
         regCcSignalInvalidCount
     );
 
-    identity_cc_module<INSTID>(
+    dcqcn_cc_module<INSTID>(
         ccSignalTable_upd_event,
-        txRateTable_upd_req
+        dcqcn_init_req,
+        txRateTable_upd_req,
+        cycle_cnt
     );
 
     tx_rate_table<INSTID>(
@@ -91,6 +96,7 @@ void cc_unit(
         txRateTable_lrh_rsp,
         txRateTable_hrr_qpn_req,
         txRateTable_hrr_rsp,
-        regRateDeniedCount
+        regRateDeniedCount,
+        cycle_cnt
     );
 }

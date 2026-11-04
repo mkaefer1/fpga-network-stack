@@ -37,7 +37,7 @@ struct cnpPacerTableEntry {
     ap_uint<1> valid;
     ap_uint<1> ever_sent; // a CNP has been sent on this QP since init, so latest_cnp_tx_timestamp is meaningful
     ap_uint<32> latest_cnp_tx_timestamp;
-}
+};
 
 struct cnpGenReq {
     ap_uint<16> qpn;
@@ -66,9 +66,9 @@ void cnp_pacer(
     static cnpPacerTableEntry cnp_tx_pacer_table[MAX_QPS];
 
     #if defined(__VITIS_HLS__)
-        #pragma HLS bind_storage variable=cc_signal_table type=RAM_2P impl=BRAM
+        #pragma HLS bind_storage variable=cnp_tx_pacer_table type=RAM_2P impl=BRAM
     #else
-        #pragma HLS RESOURCE variable=cc_signal_table core=RAM_2P_BRAM
+        #pragma HLS RESOURCE variable=cnp_tx_pacer_table core=RAM_2P_BRAM
     #endif
 
     cnpGenReq req;
@@ -76,7 +76,7 @@ void cnp_pacer(
 
     if (!qpi2cnpGen_init.empty()) {
         qpi2cnpGen_init.read(init);
-        if (initReq >= MAX_QPS) return;
+        if (init >= MAX_QPS) return;
 
         // Init the entry for the specific QP
         cnpPacerTableEntry entry;

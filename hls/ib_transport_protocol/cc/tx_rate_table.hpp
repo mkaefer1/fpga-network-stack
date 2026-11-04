@@ -31,7 +31,7 @@
 
 struct txRateEntry {
     ap_uint<32> gap;            // minimum cycles between two packets of this QP (0 = unlimited)
-    // ap_uint<32> last_send_ts;   // cycle the last packet of this QP was let through (owned by this table)
+    ap_uint<32> last_send_ts;   // cycle the last packet of this QP was let through (owned by this table)
 };
 
 struct txRateReq {
@@ -50,7 +50,8 @@ void tx_rate_table(
     hls::stream<bool>& txRateTable_lrh_rsp,
     hls::stream<ap_uint<16>>& txRateTable_hrr_qpn_req,
     hls::stream<bool>& txRateTable_hrr_rsp,
-    ap_uint<32>& regRateDeniedCount // lookups answered "denied" (0 with the identity module)
+    ap_uint<32>& regRateDeniedCount, // lookups answered "denied" (0 with the identity module)
+    volatile ap_uint<32>& cycle_cnt  // free-running cycle counter (nclk)
 );
 
 /**
@@ -59,7 +60,7 @@ void tx_rate_table(
  * Answers "may QP x send a packet now?" for two clients:
  *   local_req_handler     (txRateTable_lrh_qpn_req -> txRateTable_lrh_rsp)
  *   handle_read_requests  (txRateTable_hrr_qpn_req -> txRateTable_hrr_rsp)
- * For now the decision is based on the gap only (send-time tracking is commented out).
+ * A QP may send when at least `gap` cycles have passed since its last allowed packet.
  */
 template <int INSTID>
 void tx_rate_table(
@@ -69,7 +70,8 @@ void tx_rate_table(
     hls::stream<bool>& txRateTable_lrh_rsp,
     hls::stream<ap_uint<16>>& txRateTable_hrr_qpn_req,
     hls::stream<bool>& txRateTable_hrr_rsp,
-    ap_uint<32>& regRateDeniedCount // lookups answered "denied" (0 with the identity module)
+    ap_uint<32>& regRateDeniedCount, // lookups answered "denied" (0 with the identity module)
+    volatile ap_uint<32>& cycle_cnt  // free-running cycle counter (nclk)
 ) {
     #pragma HLS INLINE off
     #pragma HLS PIPELINE II=1
@@ -80,11 +82,6 @@ void tx_rate_table(
     #else
         #pragma HLS RESOURCE variable=tx_rate_table core=RAM_2P_BRAM
     #endif
-
-    // MAXI_TODO: time source. Counts calls of this process, i.e. cycles only while it never stalls.
-    // Only relevant for gap > 0 (the identity module always sets gap 0).
-    // static ap_uint<32> now = 0;
-    // now++;
 
     txRateReq upd_req;
     ap_uint<16> init_req;
@@ -102,7 +99,7 @@ void tx_rate_table(
 
         txRateEntry entry;
         entry.gap = 0;
-        // entry.last_send_ts = 0;
+        entry.last_send_ts = 0;
         tx_rate_table[init_req] = entry;
 
     } else if (!txRateTable_upd_req.empty()) {
@@ -123,21 +120,23 @@ void tx_rate_table(
             // Unknown QP: never block it, and always answer (the requester waits for a response)
             allowed = true;
         } else {
+            // Read the counter once: every access to the volatile port is a separate read
+            ap_uint<32> now = cycle_cnt;
+
+            // Read => Modify => Write
             txRateEntry entry = tx_rate_table[qpn_req];
-            // Gap only: gap > 0 means "denied" (the requester keeps asking) until send-time tracking is enabled
-            allowed = (entry.gap == 0);
-            if (!allowed) {
+            // Must be a 32-bit variable: ap_uint<32> - ap_uint<32> is a signed ap_int<33>, negative after a wrap.
+            // The difference modulo 2^32 is the real elapsed time as long as that is below 2^32 cycles (~17.2 s).
+            // A QP idle for longer may be held back once for at most `gap` cycles, never blocked.
+            ap_uint<32> elapsed = now - entry.last_send_ts;
+            allowed = (entry.gap == 0) || (elapsed >= entry.gap);
+            if (allowed) {
+                entry.last_send_ts = now;
+                tx_rate_table[qpn_req] = entry;
+            } else {
                 deniedCount++;
                 regRateDeniedCount = deniedCount;
             }
-
-            // Read => Modify => Write
-            // ap_uint<32> elapsed = now - entry.last_send_ts; // wrap-safe difference
-            // bool allowed = (entry.gap == 0) || (elapsed >= entry.gap);
-            // if (allowed) {
-            //     entry.last_send_ts = now;
-            //     tx_rate_table[qpn_req] = entry;
-            // }
         }
 
         if (fromHrr)

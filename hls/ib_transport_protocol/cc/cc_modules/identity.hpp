@@ -36,7 +36,7 @@ void identity_cc_module(
     hls::stream<txRateReq>& tx_rate_req
 );
 
-template <int INSTID>
+template <int INSTID = 0>
 void identity_cc_module(
     hls::stream<ccSignalUpdEvent>& cc_signal_upd_event,
     hls::stream<txRateReq>& tx_rate_req

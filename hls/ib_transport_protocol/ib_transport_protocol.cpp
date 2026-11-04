@@ -2279,6 +2279,7 @@ void qp_interface(
 	stream<ifMsnReq>&			if2msnTable_init,
 	stream<ap_uint<16>>&		qpi2ccSignalTable_init,
 	stream<ap_uint<16>>&		qpi2txRateTable_init,
+	stream<ap_uint<16>>&		qpi2dcqcn_init,
 	stream<ap_uint<16>>&		qpi2cnpPacer_init
 ) {
 #pragma HLS inline off
@@ -2319,6 +2320,7 @@ void qp_interface(
 				// Reset the per-QP congestion-control state on a full QP setup
 				qpi2ccSignalTable_init.write(context.qp_num);
 				qpi2txRateTable_init.write(context.qp_num);
+				qpi2dcqcn_init.write(context.qp_num);
 				qpi2cnpPacer_init.write(context.qp_num);
 			}
 
@@ -2592,6 +2594,7 @@ void ib_transport_protocol(
 	static stream<ccSignalReq> ccSignalTable_upd_req("ccSignalTable_upd_req");
 	static stream<ap_uint<16>> ccSignalTable_init_req("ccSignalTable_init_req");
 	static stream<ap_uint<16>> txRateTable_init_req("txRateTable_init_req");
+	static stream<ap_uint<16>> dcqcn_init_req("dcqcn_init_req");
 	static stream<ap_uint<16>> txRateTable_lrh_qpn_req("txRateTable_lrh_qpn_req");
 	static stream<bool> txRateTable_lrh_rsp("txRateTable_lrh_rsp");
 	static stream<ap_uint<16>> txRateTable_hrr_qpn_req("txRateTable_hrr_qpn_req");
@@ -2599,6 +2602,7 @@ void ib_transport_protocol(
 	#pragma HLS STREAM depth=2 variable=ccSignalTable_upd_req
 	#pragma HLS STREAM depth=2 variable=ccSignalTable_init_req
 	#pragma HLS STREAM depth=2 variable=txRateTable_init_req
+	#pragma HLS STREAM depth=2 variable=dcqcn_init_req
 	#pragma HLS STREAM depth=2 variable=txRateTable_lrh_qpn_req
 	#pragma HLS STREAM depth=2 variable=txRateTable_lrh_rsp
 	#pragma HLS STREAM depth=2 variable=txRateTable_hrr_qpn_req
@@ -2718,7 +2722,7 @@ void ib_transport_protocol(
 	#pragma HLS STREAM depth=2 variable=tx_dstQpFifo
 
 	// Interface
-	qp_interface<INSTID>(s_axis_qp_interface, stateTable2qpi_rsp, qpi2stateTable_upd_req, if2msnTable_init, ccSignalTable_init_req, txRateTable_init_req, qpi2cnpPacer_init);
+	qp_interface<INSTID>(s_axis_qp_interface, stateTable2qpi_rsp, qpi2stateTable_upd_req, if2msnTable_init, ccSignalTable_init_req, txRateTable_init_req, dcqcn_init_req, qpi2cnpPacer_init);
 
 
 	// ------------------------------------------------------------------------------------------------
@@ -2980,12 +2984,14 @@ void ib_transport_protocol(
 		ccSignalTable_upd_req,
 		ccSignalTable_init_req,
 		txRateTable_init_req,
+		dcqcn_init_req,
 		txRateTable_lrh_qpn_req,
 		txRateTable_lrh_rsp,
 		txRateTable_hrr_qpn_req,
 		txRateTable_hrr_rsp,
 		regCcSignalInvalidCount,
-		regRateDeniedCount
+		regRateDeniedCount,
+		cycle_cnt
 	);
 
 	msn_table<INSTID>(
