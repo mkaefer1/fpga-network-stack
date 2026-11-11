@@ -259,6 +259,12 @@ void rocev2_top(
 
 	#pragma HLS INTERFACE ap_none register port=local_ip_address
 	#pragma HLS INTERFACE ap_none register port=cycle_cnt
+	// Scalar inputs of the free-running dataflow region: without `stable`, HLS copies them into FIFOs
+	// from an entry_proc that also gives start tokens to their readers. entry_proc then runs at the pace
+	// of the slowest reader (II>1 CC processes), and ipv4_generate_ipv4 got one local_ip_address per
+	// 3 cycles, capping TX at ~41 Gb/s. `stable` wires the ports straight into the processes instead
+	#pragma HLS stable variable=local_ip_address
+	#pragma HLS stable variable=cycle_cnt
 
 	//DEBUG
 #ifdef DBG_IBV
@@ -395,6 +401,9 @@ void rocev2_top(
 
 	#pragma HLS INTERFACE ap_none register port=local_ip_address
 	#pragma HLS INTERFACE ap_none register port=cycle_cnt
+	// See the Vitis branch: keep the scalar inputs out of the dataflow FIFO/start-token logic
+	#pragma HLS stable variable=local_ip_address
+	#pragma HLS stable variable=cycle_cnt
 
 	//DEBUG
 #ifdef DBG_IBV
