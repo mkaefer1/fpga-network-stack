@@ -27,29 +27,39 @@
 #pragma once
 
 #include "../../../axi_utils.hpp"
-#include "../cc_signal_table.hpp"
-#include "../tx_rate_table.hpp"
+#include "../cc_types.hpp"
 
+/**
+ * Identity CC module: never throttles. Every QP stays at line rate (gap 0).
+ *
+ * On INIT it reports line rate, which keeps tx_rate_table at gap 0 (it already starts there) and keeps
+ * the output stream driven. All other events are read and ignored.
+ */
 template <int INSTID>
 void identity_cc_module(
-    hls::stream<ccSignalUpdEvent>& cc_signal_upd_event,
-    hls::stream<txRateReq>& tx_rate_req
+    hls::stream<ccEvent>& cc_init,
+    hls::stream<ccEvent>& cc_event,
+    hls::stream<ccRateUpd>& cc_rate_upd,
+    volatile ap_uint<32>& cycle_cnt
 );
 
 template <int INSTID = 0>
 void identity_cc_module(
-    hls::stream<ccSignalUpdEvent>& cc_signal_upd_event,
-    hls::stream<txRateReq>& tx_rate_req
+    hls::stream<ccEvent>& cc_init,       // in:  INIT events (from cc_event_fanout, never dropped)
+    hls::stream<ccEvent>& cc_event,      // in:  all other signals (ignored)
+    hls::stream<ccRateUpd>& cc_rate_upd, // out: line rate on INIT
+    volatile ap_uint<32>& cycle_cnt      // in:  unused, part of the common module interface
 ) {
     #pragma HLS INLINE off
     #pragma HLS PIPELINE II=1
 
-    ccSignalUpdEvent updEvent;
+    ccEvent ev;
 
-    if (!cc_signal_upd_event.empty()) {
-        cc_signal_upd_event.read(updEvent);
-
-        //Identity (usually the rate for each qpn is stored in the module but for simplicity its assumed to always be 0)
-        tx_rate_req.write(txRateReq(updEvent.qpn, 0)); // Blocking
+    // INIT first, then at most one signal (common module processing order)
+    if (!cc_init.empty()) {
+        cc_init.read(ev);
+        cc_rate_upd.write(ccRateUpd(ev.qpn, CC_LINE_RATE_MBPS));
+    } else if (!cc_event.empty()) {
+        cc_event.read(ev);
     }
 }

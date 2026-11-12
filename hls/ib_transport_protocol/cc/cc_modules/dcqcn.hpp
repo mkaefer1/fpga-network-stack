@@ -27,11 +27,12 @@
 #pragma once
 
 #include "../../../axi_utils.hpp"
-#include "../cc_signal_table.hpp"
-#include "../tx_rate_table.hpp"
+#include "../cc_types.hpp"
+#include <rocev2_config.hpp> // MAX_QPS, CC_LINE_RATE_MBPS
 
 // DCQCN reaction point (Zhu et al., SIGCOMM 2015), timer-only (no byte counter, so no hyper increase).
 // Times in nclk cycles (250 MHz). Alpha and rates in fixed point with 16 fraction bits; rates are fractions of line rate.
+// Reacts to CC_EV_INIT and CC_EV_CNP only; all other event types are read and ignored.
 
 static const ap_uint<32> FIXED_POINT_ONE = 65536; // 1.0
 static const unsigned G_SHIFT = 8; // g = 1/256
@@ -42,20 +43,17 @@ static const ap_uint<32> T_RATE_TIMER_CYCLES = 13750; // T: rate increase period
 static const ap_uint<32> N_RATE_TIMER_CYCLES = 6250;
 static const ap_uint<8>  F = 5; // F: fast recovery steps before additive increase
 
-static const unsigned long long LINE_RATE_MBPS = 100000; // the only link-dependent constant
 static const ap_uint<32> MAX_RATE_FRACTION = FIXED_POINT_ONE; // line rate
-// 10 Mb/s floor (not in the paper), at least 1 so dcqcn_rate_to_gap never divides by 0
-static const ap_uint<32> MIN_RATE_FRACTION = (10 * 65536ULL / LINE_RATE_MBPS > 0) ? 10 * 65536ULL / LINE_RATE_MBPS : 1ULL;
-static const ap_uint<32> RATE_AI = 40 * 65536ULL / LINE_RATE_MBPS; // R_AI: 40 Mb/s
+// 10 Mb/s floor (not in the paper), at least 1. Truncates to ~9.2 Mb/s at 100G; cc_rate_to_gap clamps it to CC_MIN_RATE_MBPS
+static const ap_uint<32> MIN_RATE_FRACTION = (10 * 65536ULL / CC_LINE_RATE_MBPS > 0) ? 10 * 65536ULL / CC_LINE_RATE_MBPS : 1ULL;
+static const ap_uint<32> RATE_AI = 40 * 65536ULL / CC_LINE_RATE_MBPS; // R_AI: 40 Mb/s
 
-// Minimum cycles between two packets of a QP sending at `rate` (0 at line rate)
-inline ap_uint<32> dcqcn_rate_to_gap(ap_uint<32> rate) {
+// Rate as a fraction of line rate (16 fraction bits) -> Mb/s, the common CC output unit
+inline ap_uint<32> dcqcn_rate_to_mbps(ap_uint<32> rate) {
     #pragma HLS INLINE
-    if (rate >= MAX_RATE_FRACTION) return 0;
-    // Wire time of a full PMTU packet at line rate, 16 fraction bits (cancel with the rate's):
-    // 4096 B payload + 98 B (Eth+FCS+preamble+IFG 38, IPv4 20, UDP 8, BTH 12, RETH 16, ICRC 4), 83.9 cycles at 100G
-    const ap_uint<32> pktCycles = 4194ULL * 8 * 250 * 65536 / LINE_RATE_MBPS;
-    return pktCycles / ap_uint<17>(rate); // rate < line rate fits 17 bits: small divider
+    if (rate >= MAX_RATE_FRACTION) return CC_LINE_RATE_MBPS;
+    ap_uint<64> mbps = ap_uint<64>(rate) * CC_LINE_RATE_MBPS;
+    return ap_uint<32>(mbps >> 16);
 }
 
 struct dcqcnTableEntry {
@@ -76,17 +74,17 @@ struct dcqcnTableEntry {
 
 template <int INSTID>
 void dcqcn_cc_module(
-    hls::stream<ccSignalUpdEvent>& cc_signal_upd_event,
-    hls::stream<ap_uint<16>>& dcqcn_init_req,
-    hls::stream<txRateReq>& tx_rate_req,
+    hls::stream<ccEvent>& cc_init,
+    hls::stream<ccEvent>& cc_event,
+    hls::stream<ccRateUpd>& cc_rate_upd,
     volatile ap_uint<32>& cycle_cnt
 );
 
 template <int INSTID = 0>
 void dcqcn_cc_module(
-    hls::stream<ccSignalUpdEvent>& cc_signal_upd_event, // in: CNP per QP (from cc_signal_table)
-    hls::stream<ap_uint<16>>& dcqcn_init_req, // in: QP setup (from qp_interface)
-    hls::stream<txRateReq>& tx_rate_req, // out: new gap per QP (to tx_rate_table)
+    hls::stream<ccEvent>& cc_init, // in: INIT events (from cc_event_fanout, never dropped)
+    hls::stream<ccEvent>& cc_event, // in: all other signals (from cc_event_fanout); only CNPs are used
+    hls::stream<ccRateUpd>& cc_rate_upd, // out: new rate per QP (to cc_rate_to_gap)
     volatile ap_uint<32>& cycle_cnt // in: free-running cycle counter (nclk)
 ) {
     #pragma HLS INLINE off
@@ -101,27 +99,31 @@ void dcqcn_cc_module(
 
     static ap_uint<16> scanQpn = 0; // next QP for the timer scan
 
-    ap_uint<16> initReq;
-    ccSignalUpdEvent updEvent;
+    ccEvent initEv;
+    ccEvent updEvent;
     dcqcnTableEntry entry;
 
     // Read once: every access to the volatile port is a separate read.
     // Elapsed times below are wrap-safe because they are assigned to ap_uint<32> (a raw difference is a signed ap_int<33>)
     ap_uint<32> now = cycle_cnt;
 
-    if (!dcqcn_init_req.empty()) {
-        dcqcn_init_req.read(initReq);
-        if (initReq >= MAX_QPS) return;
+    // Processing order (required by the module interface): INIT first, then at most one signal, timers only when both are empty
+    if (!cc_init.empty()) {
+        cc_init.read(initEv);
+        if (initEv.qpn >= MAX_QPS) return;
 
         // Line rate, alpha = 1. last_rate_cut lies N in the past so the first CNP cuts at once.
         // No rate update: tx_rate_table inits the QP to gap 0 itself
-        dcqcn_table[initReq] = dcqcnTableEntry(1, MAX_RATE_FRACTION, MAX_RATE_FRACTION, FIXED_POINT_ONE, now, now, now - N_RATE_TIMER_CYCLES, 0);
+        dcqcn_table[initEv.qpn] = dcqcnTableEntry(1, MAX_RATE_FRACTION, MAX_RATE_FRACTION, FIXED_POINT_ONE, now, now, now - N_RATE_TIMER_CYCLES, 0);
 
-    } else if (!cc_signal_upd_event.empty()) {
-        // CNP: cut the rate (at most once per N), raise alpha (every CNP)
-        cc_signal_upd_event.read(updEvent);
+    } else if (!cc_event.empty()) {
+        cc_event.read(updEvent);
+        // Only CNPs drive DCQCN. Every other event type (ACKs: one per data packet) must be ignored,
+        // otherwise each ACK would cut the rate
+        if (updEvent.type != CC_EV_CNP) return;
         if (updEvent.qpn >= MAX_QPS) return;
 
+        // CNP: cut the rate (at most once per N), raise alpha (every CNP)
         entry = dcqcn_table[updEvent.qpn];
         if (!entry.valid) return;
 
@@ -138,7 +140,7 @@ void dcqcn_cc_module(
             entry.last_rate_change = now;
             entry.last_rate_cut = now;
 
-            tx_rate_req.write(txRateReq(updEvent.qpn, dcqcn_rate_to_gap(entry.rc)));
+            cc_rate_upd.write(ccRateUpd(updEvent.qpn, dcqcn_rate_to_mbps(entry.rc)));
         }
 
         // alpha = (1 - g) * alpha + g, K restarts
@@ -148,7 +150,8 @@ void dcqcn_cc_module(
         dcqcn_table[updEvent.qpn] = entry;
 
     } else {
-        // Idle: check one QP per cycle. A pass over 500 QPs takes 2 us, well below K and T
+        // Idle: check one QP per iteration. This module does not reach II = 1: at II = 9 a pass over
+        // 500 QPs takes ~4,500 cycles (~18 us at 250 MHz), still well below K and T. Do not assume II = 1 when tuning timers
         ap_uint<16> qpn = scanQpn;
         scanQpn = (scanQpn == MAX_QPS - 1) ? ap_uint<16>(0) : ap_uint<16>(scanQpn + 1);
 
@@ -178,7 +181,7 @@ void dcqcn_cc_module(
             entry.last_rate_change = now;
             changed = true;
 
-            tx_rate_req.write(txRateReq(qpn, dcqcn_rate_to_gap(entry.rc)));
+            cc_rate_upd.write(ccRateUpd(qpn, dcqcn_rate_to_mbps(entry.rc)));
         }
 
         if (changed) dcqcn_table[qpn] = entry;

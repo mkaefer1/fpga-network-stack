@@ -287,7 +287,7 @@ void rx_ibh_fsm(
 	stream<ackEvent>& ibhEventFifo,
 	stream<bool>& ibhDropFifo,
 	stream<fwdPolicy>& ibhDropMetaFifo,
-	stream<ccSignalReq>& rxIbh2ccSignalTable_upd_req,
+	stream<ccEvent>& rxIbh2ccSignalTable_cnp_req,
 	//stream<ackMeta>& m_axis_rx_ack_meta,
 #ifdef RETRANS_EN
 	stream<rxTimerUpdate>&	rxClearTimer_req,
@@ -320,12 +320,12 @@ void rx_ibh_fsm(
 			metaIn.read(meta);
 			exhMetaFifo.read(emeta);
 			if (meta.op_code == CNP) {
-				// Congestion signal for this QP (non-blocking: CC must never stall RX)
-				// MAXI_TODO: timestamp source, 0 for now
+				// Congestion signal for this QP (non-blocking: CC must never stall RX).
+				// cc_signal_table sets the timestamp
 				cnpRxCount++;
 				regCnpRxCount = cnpRxCount;
-				if (!rxIbh2ccSignalTable_upd_req.full()) {
-					rxIbh2ccSignalTable_upd_req.write(ccSignalReq(meta.dest_qp(15,0), 1, 0));
+				if (!rxIbh2ccSignalTable_cnp_req.full()) {
+					rxIbh2ccSignalTable_cnp_req.write(ccEvent(CC_EV_CNP, meta.dest_qp(15,0)));
 				}
 				else {
 					cnpRxDropCount++;
@@ -2279,7 +2279,6 @@ void qp_interface(
 	stream<ifMsnReq>&			if2msnTable_init,
 	stream<ap_uint<16>>&		qpi2ccSignalTable_init,
 	stream<ap_uint<16>>&		qpi2txRateTable_init,
-	stream<ap_uint<16>>&		qpi2dcqcn_init,
 	stream<ap_uint<16>>&		qpi2cnpPacer_init
 ) {
 #pragma HLS inline off
@@ -2317,10 +2316,10 @@ void qp_interface(
 				// Default case: Call both, conventional call 
 				qpi2stateTable_upd_req.write(ifStateReq(context.qp_num, context.newState, context.remote_psn, context.local_psn));
 				if2msnTable_init.write(ifMsnReq(context.qp_num, context.r_key)); //TODO store virtual address somewhere??
-				// Reset the per-QP congestion-control state on a full QP setup
+				// Reset the per-QP congestion-control state on a full QP setup.
+				// CC modules get their INIT through cc_signal_table, so no per-module stream is needed here
 				qpi2ccSignalTable_init.write(context.qp_num);
 				qpi2txRateTable_init.write(context.qp_num);
-				qpi2dcqcn_init.write(context.qp_num);
 				qpi2cnpPacer_init.write(context.qp_num);
 			}
 
@@ -2591,26 +2590,24 @@ void ib_transport_protocol(
 #endif
 
 	//CC unit Fifos (streams between the CC components are declared inside cc_unit)
-	static stream<ccSignalReq> ccSignalTable_upd_req("ccSignalTable_upd_req");
+	static stream<ccEvent> ccSignalTable_cnp_req("ccSignalTable_cnp_req");
 	static stream<ap_uint<16>> ccSignalTable_init_req("ccSignalTable_init_req");
 	static stream<ap_uint<16>> txRateTable_init_req("txRateTable_init_req");
-	static stream<ap_uint<16>> dcqcn_init_req("dcqcn_init_req");
 	static stream<ap_uint<16>> txRateTable_lrh_qpn_req("txRateTable_lrh_qpn_req");
 	static stream<bool> txRateTable_lrh_rsp("txRateTable_lrh_rsp");
 	static stream<ap_uint<16>> txRateTable_hrr_qpn_req("txRateTable_hrr_qpn_req");
 	static stream<bool> txRateTable_hrr_rsp("txRateTable_hrr_rsp");
-	#pragma HLS STREAM depth=2 variable=ccSignalTable_upd_req
+	#pragma HLS STREAM depth=2 variable=ccSignalTable_cnp_req
 	#pragma HLS STREAM depth=2 variable=ccSignalTable_init_req
 	#pragma HLS STREAM depth=2 variable=txRateTable_init_req
-	#pragma HLS STREAM depth=2 variable=dcqcn_init_req
 	#pragma HLS STREAM depth=2 variable=txRateTable_lrh_qpn_req
 	#pragma HLS STREAM depth=2 variable=txRateTable_lrh_rsp
 	#pragma HLS STREAM depth=2 variable=txRateTable_hrr_qpn_req
 	#pragma HLS STREAM depth=2 variable=txRateTable_hrr_rsp
 	#if defined(__VITIS_HLS__)
-		#pragma HLS aggregate variable=ccSignalTable_upd_req compact=bit
+		#pragma HLS aggregate variable=ccSignalTable_cnp_req compact=bit
 	#else
-		#pragma HLS DATA_PACK variable=ccSignalTable_upd_req
+		#pragma HLS DATA_PACK variable=ccSignalTable_cnp_req
 	#endif
 
 	// MSN Table
@@ -2722,7 +2719,7 @@ void ib_transport_protocol(
 	#pragma HLS STREAM depth=2 variable=tx_dstQpFifo
 
 	// Interface
-	qp_interface<INSTID>(s_axis_qp_interface, stateTable2qpi_rsp, qpi2stateTable_upd_req, if2msnTable_init, ccSignalTable_init_req, txRateTable_init_req, dcqcn_init_req, qpi2cnpPacer_init);
+	qp_interface<INSTID>(s_axis_qp_interface, stateTable2qpi_rsp, qpi2stateTable_upd_req, if2msnTable_init, ccSignalTable_init_req, txRateTable_init_req, qpi2cnpPacer_init);
 
 
 	// ------------------------------------------------------------------------------------------------
@@ -2782,7 +2779,7 @@ void ib_transport_protocol(
 		rx_ibhEventFifo,
 		rx_ibhDropFifo,
 		rx_ibhDropMetaFifo,
-		ccSignalTable_upd_req,
+		ccSignalTable_cnp_req,
 		//m_axis_rx_ack_meta,
 #ifdef RETRANS_EN
 		rxClearTimer_req,
@@ -2981,10 +2978,9 @@ void ib_transport_protocol(
 	);
 
 	cc_unit<INSTID>(
-		ccSignalTable_upd_req,
+		ccSignalTable_cnp_req,
 		ccSignalTable_init_req,
 		txRateTable_init_req,
-		dcqcn_init_req,
 		txRateTable_lrh_qpn_req,
 		txRateTable_lrh_rsp,
 		txRateTable_hrr_qpn_req,

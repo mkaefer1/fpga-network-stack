@@ -14,6 +14,13 @@ set(CLOCK_PERIOD 4 CACHE STRING "Target clock period in nanoseconds")
 set(PMTU_BYTES 4096 CACHE STRING "PMTU size.")
 set(RETRANS_EN 1 CACHE STRING "Re-transmission logic enable")
 set(ROCE_STACK_MAX_QPS 500 CACHE STRING "Maximum number of queue pairs the RoCE stack can support")
+set(CC_MODULE DCQCN CACHE STRING "Congestion control module compiled into the stack: DCQCN or IDENTITY")
+set(CC_LINE_RATE_MBPS 100000 CACHE STRING "Line rate in Mb/s, used to convert CC rates to inter-packet gaps")
+
+set(CC_MODULES_SUPPORTED DCQCN IDENTITY)
+if(NOT CC_MODULE IN_LIST CC_MODULES_SUPPORTED)
+   message(FATAL_ERROR "CC_MODULE must be one of: ${CC_MODULES_SUPPORTED} (got '${CC_MODULE}')")
+endif()
 
 # Make sure Vitis HLS is installed
 find_package(VitisHLS REQUIRED)

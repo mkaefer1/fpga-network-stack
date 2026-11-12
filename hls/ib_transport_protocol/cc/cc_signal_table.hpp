@@ -30,47 +30,45 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "../../axi_utils.hpp"
 #include "../ib_transport_protocol.hpp"
+#include "cc_types.hpp"
 #include <rocev2_config.hpp> //defines MAX_QPS
 
+/**
+ * Per-QP statistics. Not part of the events: modules keep their own state,
+ * these counters are only for statistics and (later) per-QP readback by software.
+ */
 struct ccSignalTableEntry {
-    ap_uint<1> valid; // Should be set by init
-
+    ap_uint<1>  valid;          // set by INIT, signals for invalid QPs are dropped
     ap_uint<32> cnp_count;
-    ap_uint<32> latest_cnp_timestamp;
-};
-
-struct ccSignalReq {
-    ap_uint<16> qpn;
-    ap_uint<32> new_cnp_count; // How many cnp counts should be added
-    ap_uint<32> new_latest_cnp_timestamp;
-    ccSignalReq() {}
-    ccSignalReq(ap_uint<16> qpn, ap_uint<32> new_cnp_count, ap_uint<32> new_latest_cnp_timestamp)
-        :qpn(qpn), new_cnp_count(new_cnp_count), new_latest_cnp_timestamp(new_latest_cnp_timestamp) {}
-};
-
-struct ccSignalUpdEvent {
-    ap_uint<16> qpn;
-    ap_uint<32> cnp_count;
-    ap_uint<32> latest_cnp_timestamp;
-    ccSignalUpdEvent() {}
-    ccSignalUpdEvent(ap_uint<16> qpn, ap_uint<32> cnp_count, ap_uint<32> latest_cnp_timestamp)
-        :qpn(qpn), cnp_count(cnp_count), latest_cnp_timestamp(latest_cnp_timestamp) {}
+    ap_uint<32> last_cnp_ts;    // cycle_cnt of the last CNP
 };
 
 template <int INSTID>
 void cc_signal_table(
-    hls::stream<ccSignalReq>& ccSignalTable_upd_req,
     hls::stream<ap_uint<16>>& ccSignalTable_init_req,
-    hls::stream<ccSignalUpdEvent>& ccSignalTable_upd_event,
-    ap_uint<32>& regCcSignalInvalidCount // signals dropped: QP out of range or not initialized
+    hls::stream<ccEvent>& ccSignalTable_cnp_req,
+    hls::stream<ccEvent>& cc_event_out,
+    ap_uint<32>& regCcSignalInvalidCount,
+    volatile ap_uint<32>& cycle_cnt
 );
 
+/**
+ * Collects the congestion signals of all sources, one input stream per source.
+ *
+ * For every valid signal it emits one ccEvent (narrow: the signal only, timestamped here).
+ *   - INIT:  written to cc_event_out blocking. A lost INIT would leave a module without the QP,
+ *            and INITs only happen at QP setup, so a stall here never touches the datapath.
+ *   - other: written non-blocking. The CC path may lose signals but must never stall the RX path.
+ *
+ * Input priority: INIT > CNP (> NAK/TIMEOUT > ACK, phase 2). Rare signals are never starved.
+ */
 template <int INSTID = 0>
 void cc_signal_table(
-    hls::stream<ccSignalReq>& ccSignalTable_upd_req,
-    hls::stream<ap_uint<16>>& ccSignalTable_init_req,
-    hls::stream<ccSignalUpdEvent>& ccSignalTable_upd_event,
-    ap_uint<32>& regCcSignalInvalidCount // signals dropped: QP out of range or not initialized
+    hls::stream<ap_uint<16>>& ccSignalTable_init_req,  // in:  QP setup (qp_interface, written blocking)
+    hls::stream<ccEvent>& ccSignalTable_cnp_req,       // in:  CNPs (rx_ibh_fsm, written non-blocking)
+    hls::stream<ccEvent>& cc_event_out,                // out: events to cc_event_fanout
+    ap_uint<32>& regCcSignalInvalidCount,              // out: signals dropped, QP out of range or not initialized
+    volatile ap_uint<32>& cycle_cnt                    // in:  free-running cycle counter (nclk)
 ) {
     #pragma HLS PIPELINE II=1
     #pragma HLS INLINE off
@@ -85,8 +83,11 @@ void cc_signal_table(
         #pragma HLS RESOURCE variable=cc_signal_table core=RAM_2P_BRAM
     #endif
 
-    ccSignalReq ccReq;
     ap_uint<16> initReq;
+    ccEvent ev;
+
+    // Read once: every access to the volatile port is a separate read
+    ap_uint<32> now = cycle_cnt;
 
     if (!ccSignalTable_init_req.empty()) {
         ccSignalTable_init_req.read(initReq);
@@ -96,30 +97,37 @@ void cc_signal_table(
         ccSignalTableEntry entry;
         entry.valid = 1;
         entry.cnp_count = 0;
-        entry.latest_cnp_timestamp = 0; //MAXI_TODO: Think this over when its clear how timestamps are handled
+        entry.last_cnp_ts = 0;
         cc_signal_table[initReq] = entry;
+
+        ccEvent initEv(CC_EV_INIT, initReq);
+        initEv.ts = now;
+        cc_event_out.write(initEv); // Blocking: INIT must never be lost
     }
-    else if (!ccSignalTable_upd_req.empty()) {
-        ccSignalTable_upd_req.read(ccReq);
-        if (ccReq.qpn >= MAX_QPS) {
+    else if (!ccSignalTable_cnp_req.empty()) {
+        ccSignalTable_cnp_req.read(ev);
+        if (ev.qpn >= MAX_QPS) {
             invalidCount++;
             regCcSignalInvalidCount = invalidCount;
             return;
         }
 
         // Read => Modify => Write
-        ccSignalTableEntry entry = cc_signal_table[ccReq.qpn];
-        if (!entry.valid) { // Drop updates for uninitialized entries
+        ccSignalTableEntry entry = cc_signal_table[ev.qpn];
+        if (!entry.valid) { // Drop signals for uninitialized QPs (this also orders a QP's INIT before its signals)
             invalidCount++;
             regCcSignalInvalidCount = invalidCount;
             return;
         }
-        entry.cnp_count += ccReq.new_cnp_count;
-        entry.latest_cnp_timestamp = ccReq.new_latest_cnp_timestamp;
-        cc_signal_table[ccReq.qpn] = entry;
+        entry.cnp_count++;
+        entry.last_cnp_ts = now;
+        cc_signal_table[ev.qpn] = entry;
 
-        // Only output when queue is not full => otherwise this would stall the RX
-        if (!ccSignalTable_upd_event.full())
-            ccSignalTable_upd_event.write(ccSignalUpdEvent(ccReq.qpn, entry.cnp_count, entry.latest_cnp_timestamp));
+        ev.type = CC_EV_CNP;
+        ev.ts = now;
+        // Non-blocking: when the fanout input is full the signal is dropped instead of stalling the RX path
+        // (drop counter exported with the other per-signal counters in phase 2)
+        if (!cc_event_out.full())
+            cc_event_out.write(ev);
     }
 }
