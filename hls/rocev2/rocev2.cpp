@@ -67,7 +67,14 @@ void rocev2(
     ap_uint<32>& regCnpRxCount,
     ap_uint<32>& regCnpRxDropCount,
     ap_uint<32>& regCcSignalInvalidCount,
-    ap_uint<32>& regRateDeniedCount
+    ap_uint<32>& regRateDeniedCount,
+    ap_uint<32>& regCcAckCount,
+    ap_uint<32>& regCcAckEceCount,
+    ap_uint<32>& regCcNakCount,
+    ap_uint<32>& regCcTimeoutCount,
+    ap_uint<32>& regCcEventDropCount,
+    ap_uint<32>& regCcModuleDropCount,
+    ap_uint<32>& regAckBecnTxCount
 ) {
 #pragma HLS INLINE
 
@@ -183,7 +190,14 @@ void rocev2(
         regCnpRxCount,
         regCnpRxDropCount,
         regCcSignalInvalidCount,
-        regRateDeniedCount
+        regRateDeniedCount,
+        regCcAckCount,
+        regCcAckEceCount,
+        regCcNakCount,
+        regCcTimeoutCount,
+        regCcEventDropCount,
+        regCcModuleDropCount,
+        regAckBecnTxCount
 	);
     
 }
@@ -226,7 +240,14 @@ void rocev2_top(
     ap_uint<32>& regCnpRxCount,
     ap_uint<32>& regCnpRxDropCount,
     ap_uint<32>& regCcSignalInvalidCount,
-    ap_uint<32>& regRateDeniedCount
+    ap_uint<32>& regRateDeniedCount,
+    ap_uint<32>& regCcAckCount,
+    ap_uint<32>& regCcAckEceCount,
+    ap_uint<32>& regCcNakCount,
+    ap_uint<32>& regCcTimeoutCount,
+    ap_uint<32>& regCcEventDropCount,
+    ap_uint<32>& regCcModuleDropCount,
+    ap_uint<32>& regAckBecnTxCount
 ) {
 	#pragma HLS DATAFLOW disable_start_propagation
 	#pragma HLS INTERFACE ap_ctrl_none port=return
@@ -327,7 +348,14 @@ void rocev2_top(
         regCnpRxCount,
         regCnpRxDropCount,
         regCcSignalInvalidCount,
-        regRateDeniedCount
+        regRateDeniedCount,
+        regCcAckCount,
+        regCcAckEceCount,
+        regCcNakCount,
+        regCcTimeoutCount,
+        regCcEventDropCount,
+        regCcModuleDropCount,
+        regAckBecnTxCount
 	);
 	
 #else
@@ -368,7 +396,14 @@ void rocev2_top(
     ap_uint<32>& regCnpRxCount,
     ap_uint<32>& regCnpRxDropCount,
     ap_uint<32>& regCcSignalInvalidCount,
-    ap_uint<32>& regRateDeniedCount
+    ap_uint<32>& regRateDeniedCount,
+    ap_uint<32>& regCcAckCount,
+    ap_uint<32>& regCcAckEceCount,
+    ap_uint<32>& regCcNakCount,
+    ap_uint<32>& regCcTimeoutCount,
+    ap_uint<32>& regCcEventDropCount,
+    ap_uint<32>& regCcModuleDropCount,
+    ap_uint<32>& regAckBecnTxCount
 ) {
 	#pragma HLS DATAFLOW disable_start_propagation
 	#pragma HLS INTERFACE ap_ctrl_none port=return
@@ -450,7 +485,14 @@ void rocev2_top(
         regCnpRxCount,
         regCnpRxDropCount,
         regCcSignalInvalidCount,
-        regRateDeniedCount
+        regRateDeniedCount,
+        regCcAckCount,
+        regCcAckEceCount,
+        regCcNakCount,
+        regCcTimeoutCount,
+        regCcEventDropCount,
+        regCcModuleDropCount,
+        regAckBecnTxCount
 );
 #endif
 

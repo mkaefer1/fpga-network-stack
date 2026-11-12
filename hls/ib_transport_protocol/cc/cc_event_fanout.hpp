@@ -46,11 +46,13 @@ template <int INSTID = 0>
 void cc_event_fanout(
     hls::stream<ccEvent>& cc_event_in,   // in:  events from cc_signal_table
     hls::stream<ccEvent>& mod_cc_init,   // out: module INIT FIFO (blocking)
-    hls::stream<ccEvent>& mod_cc_event   // out: module signal FIFO (non-blocking)
+    hls::stream<ccEvent>& mod_cc_event,  // out: module signal FIFO (non-blocking)
+    ap_uint<32>& regCcModuleDropCount    // out: signals dropped because the module's signal FIFO was full
 ) {
     #pragma HLS PIPELINE II=1
     #pragma HLS INLINE off
 
+    static ap_uint<32> moduleDropCount = 0;
     ccEvent ev;
 
     if (!cc_event_in.empty()) {
@@ -59,7 +61,10 @@ void cc_event_fanout(
             mod_cc_init.write(ev); // Blocking: INIT must never be lost
         } else if (!mod_cc_event.full()) {
             mod_cc_event.write(ev);
+        } else {
+            // Dropped for this module only (phase 3: one counter per module)
+            moduleDropCount++;
+            regCcModuleDropCount = moduleDropCount;
         }
-        // else: dropped for this module (per-module drop counter exported in phase 3)
     }
 }

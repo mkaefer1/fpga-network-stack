@@ -272,13 +272,16 @@ struct ackEvent
 	ap_uint<24>	psn;
 	bool		validPsn;
 	bool		isNak;
+	bool		ece;	// ECN echo: the ACKed packet arrived CE-marked, sent as BECN in the ACK (EN_ACK_ECN)
 	ackEvent() {}
 	ackEvent(ap_uint<24> qpn)
-		:qpn(qpn), psn(0), validPsn(false), isNak(false) {}
+		:qpn(qpn), psn(0), validPsn(false), isNak(false), ece(false) {}
 	ackEvent(ap_uint<24> qpn, bool nak)
-			:qpn(qpn), psn(0), validPsn(false), isNak(nak) {}
+			:qpn(qpn), psn(0), validPsn(false), isNak(nak), ece(false) {}
 	ackEvent(ap_uint<24> qp, ap_uint<24> psn, bool nak)
-			:qpn(qp), psn(psn), validPsn(true), isNak(nak) {}
+			:qpn(qp), psn(psn), validPsn(true), isNak(nak), ece(false) {}
+	ackEvent(ap_uint<24> qp, ap_uint<24> psn, bool nak, bool ece)
+			:qpn(qp), psn(psn), validPsn(true), isNak(nak), ece(ece) {}
 };
 
 //TODO create readEvent
@@ -292,24 +295,25 @@ struct event
 	ap_uint<24>	psn;
 	bool		validPsn;
 	bool		isNak;
+	bool		ece;	// ACK only: ECN echo (BECN)
 	event()
-		:op_code(RC_ACK), validPsn(false), isNak(false) {}
+		:op_code(RC_ACK), validPsn(false), isNak(false), ece(false) {}
 	event(ibOpCode op, ap_uint<24> qp)
-		:op_code(op), qpn(qp), validPsn(false), isNak(false) {}
+		:op_code(op), qpn(qp), validPsn(false), isNak(false), ece(false) {}
 	event(ackEvent& aev)
-		:op_code(RC_ACK), qpn(aev.qpn), psn(aev.psn), validPsn(aev.validPsn), isNak(aev.isNak) {}
+		:op_code(RC_ACK), qpn(aev.qpn), psn(aev.psn), validPsn(aev.validPsn), isNak(aev.isNak), ece(aev.ece) {}
 	event(cnpEvent& cev)
-		:op_code(CNP), qpn(cev.qpn), psn(0), validPsn(true), isNak(false) {}
+		:op_code(CNP), qpn(cev.qpn), psn(0), validPsn(true), isNak(false), ece(false) {}
 	/*event(ibOpCode op, ap_uint<24> qp, ap_uint<24> psn, bool nak)
 		:op_code(op), qpn(qp), psn(psn), validPsn(true), isNak(nak) {}*/
 	event(ibOpCode op, ap_uint<24> qp, ap_uint<32> len)
-		:op_code(op), qpn(qp), addr(0), length(len), psn(0), validPsn(false), isNak(false) {}
+		:op_code(op), qpn(qp), addr(0), length(len), psn(0), validPsn(false), isNak(false), ece(false) {}
 	event(ibOpCode op, ap_uint<24> qp, ap_uint<64> addr, ap_uint<32> len)
-		:op_code(op), qpn(qp), addr(addr), length(len), psn(0), validPsn(false), isNak(false) {}
+		:op_code(op), qpn(qp), addr(addr), length(len), psn(0), validPsn(false), isNak(false), ece(false) {}
 	event(ibOpCode op, ap_uint<24> qp, ap_uint<32> len, ap_uint<24> psn)
-		:op_code(op), qpn(qp), addr(0), length(len), psn(psn), validPsn(true), isNak(false) {}
+		:op_code(op), qpn(qp), addr(0), length(len), psn(psn), validPsn(true), isNak(false), ece(false) {}
 	event(ibOpCode op, ap_uint<24> qp, ap_uint<64> addr, ap_uint<32> len, ap_uint<24> psn)
-		:op_code(op), qpn(qp), addr(addr), length(len), psn(psn), validPsn(true), isNak(false) {}
+		:op_code(op), qpn(qp), addr(addr), length(len), psn(psn), validPsn(true), isNak(false), ece(false) {}
 };
 
 /* Pakage info */
@@ -428,6 +432,15 @@ public:
 	{
 		header[71] = bit;
 	}
+	// BECN (backward explicit congestion notification): set in ACKs to echo a CE-marked packet (EN_ACK_ECN)
+	void setBecn(bool bit)
+	{
+		header[33] = bit;
+	}
+	bool getBecn()
+	{
+		return header[33];
+	}
 };
 
 struct ibhMeta
@@ -438,14 +451,15 @@ struct ibhMeta
 	ap_uint<24> psn;
 	bool		validPSN;
 	ap_uint<22> numPkg; //TODO does not really fit here //TODO how many bits does this need?
+	bool		becn; // BTH BECN bit. RX: parsed from the packet, TX: set in outgoing ACKs (ECN echo)
 	ibhMeta()
-		:op_code(RC_ACK) {} //TODO
+		:op_code(RC_ACK), becn(false) {} //TODO
 	ibhMeta(ibOpCode op, ap_uint<16> key, ap_uint<24> qp)
-			:op_code(op), partition_key(key), dest_qp(qp), psn(0), validPSN(false), numPkg(1) {}
+			:op_code(op), partition_key(key), dest_qp(qp), psn(0), validPSN(false), numPkg(1), becn(false) {}
 	ibhMeta(ibOpCode op, ap_uint<16> key, ap_uint<24> qp, ap_uint<22> numPkg)
-			:op_code(op), partition_key(key), dest_qp(qp), psn(0), validPSN(false), numPkg(numPkg) {}
+			:op_code(op), partition_key(key), dest_qp(qp), psn(0), validPSN(false), numPkg(numPkg), becn(false) {}
 	ibhMeta(ibOpCode op, ap_uint<16> key, ap_uint<24> qp, ap_uint<24> psn, bool vp)
-			:op_code(op), partition_key(key), dest_qp(qp), psn(psn), validPSN(vp), numPkg(1) {}
+			:op_code(op), partition_key(key), dest_qp(qp), psn(psn), validPSN(vp), numPkg(1), becn(false) {}
 };
 
 struct exhMeta
@@ -639,5 +653,12 @@ void ib_transport_protocol(
     ap_uint<32>& regCnpRxCount,
     ap_uint<32>& regCnpRxDropCount,
     ap_uint<32>& regCcSignalInvalidCount,
-    ap_uint<32>& regRateDeniedCount
+    ap_uint<32>& regRateDeniedCount,
+    ap_uint<32>& regCcAckCount,          // CC: ACK events
+    ap_uint<32>& regCcAckEceCount,       // CC: ACK events with ECN echo (BECN)
+    ap_uint<32>& regCcNakCount,          // CC: NAK events
+    ap_uint<32>& regCcTimeoutCount,      // CC: retransmission timeout events
+    ap_uint<32>& regCcEventDropCount,    // CC: events dropped at the fanout input
+    ap_uint<32>& regCcModuleDropCount,   // CC: events dropped at the module's signal FIFO
+    ap_uint<32>& regAckBecnTxCount       // ACKs sent with BECN (ECN echo, EN_ACK_ECN)
 );

@@ -67,7 +67,14 @@ using namespace hls;
     ap_uint<32> regCnpRxCount_n##ninst = 0;                              \
     ap_uint<32> regCnpRxDropCount_n##ninst = 0;                          \
     ap_uint<32> regCcSignalInvalidCount_n##ninst = 0;                    \
-    ap_uint<32> regRateDeniedCount_n##ninst = 0;
+    ap_uint<32> regRateDeniedCount_n##ninst = 0;                         \
+    ap_uint<32> regCcAckCount_n##ninst = 0;                            \
+    ap_uint<32> regCcAckEceCount_n##ninst = 0;                         \
+    ap_uint<32> regCcNakCount_n##ninst = 0;                            \
+    ap_uint<32> regCcTimeoutCount_n##ninst = 0;                        \
+    ap_uint<32> regCcEventDropCount_n##ninst = 0;                      \
+    ap_uint<32> regCcModuleDropCount_n##ninst = 0;                     \
+    ap_uint<32> regAckBecnTxCount_n##ninst = 0;
 
 #define IBTRUN(ninst)                               \
     ib_transport_protocol<DATA_WIDTH, ninst>(       \
@@ -97,7 +104,14 @@ using namespace hls;
         regCnpRxCount_n##ninst,                     \
         regCnpRxDropCount_n##ninst,                 \
         regCcSignalInvalidCount_n##ninst,           \
-        regRateDeniedCount_n##ninst                 \
+        regRateDeniedCount_n##ninst,                \
+        regCcAckCount_n##ninst,                      \
+        regCcAckEceCount_n##ninst,                   \
+        regCcNakCount_n##ninst,                      \
+        regCcTimeoutCount_n##ninst,                  \
+        regCcEventDropCount_n##ninst,                \
+        regCcModuleDropCount_n##ninst,               \
+        regAckBecnTxCount_n##ninst                   \
     );
 
 #define SWITCHPORT(port)                                    \
@@ -257,9 +271,15 @@ int main(int argc, char* argv[]){
     std::cout << "Node 0: ECT rx " << regEcnEctRxCount_n0 << ", CNP tx/rx " << regCnpTxCount_n0 << "/" << regCnpRxCount_n0
         << ", CNP rx dropped " << regCnpRxDropCount_n0 << ", CC signal invalid " << regCcSignalInvalidCount_n0
         << ", rate denied " << regRateDeniedCount_n0 << std::endl;
+    std::cout << "Node 0: CC ACK " << regCcAckCount_n0 << " (ECE " << regCcAckEceCount_n0 << "), NAK " << regCcNakCount_n0
+        << ", timeout " << regCcTimeoutCount_n0 << ", CC event drop " << regCcEventDropCount_n0 << ", module drop " << regCcModuleDropCount_n0
+        << ", BECN tx " << regAckBecnTxCount_n0 << std::endl;
     std::cout << "Node 1: ECT rx " << regEcnEctRxCount_n1 << ", CNP tx/rx " << regCnpTxCount_n1 << "/" << regCnpRxCount_n1
         << ", CNP rx dropped " << regCnpRxDropCount_n1 << ", CC signal invalid " << regCcSignalInvalidCount_n1
         << ", rate denied " << regRateDeniedCount_n1 << std::endl;
+    std::cout << "Node 1: CC ACK " << regCcAckCount_n1 << " (ECE " << regCcAckEceCount_n1 << "), NAK " << regCcNakCount_n1
+        << ", timeout " << regCcTimeoutCount_n1 << ", CC event drop " << regCcEventDropCount_n1 << ", module drop " << regCcModuleDropCount_n1
+        << ", BECN tx " << regAckBecnTxCount_n1 << std::endl;
 
     return 0;
 }

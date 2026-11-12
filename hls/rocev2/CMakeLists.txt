@@ -16,6 +16,7 @@ set(RETRANS_EN 1 CACHE STRING "Re-transmission logic enable")
 set(ROCE_STACK_MAX_QPS 500 CACHE STRING "Maximum number of queue pairs the RoCE stack can support")
 set(CC_MODULE DCQCN CACHE STRING "Congestion control module compiled into the stack: DCQCN or IDENTITY")
 set(CC_LINE_RATE_MBPS 100000 CACHE STRING "Line rate in Mb/s, used to convert CC rates to inter-packet gaps")
+set(EN_ACK_ECN 1 CACHE STRING "Echo ECN CE marks in ACKs (BTH BECN bit), in addition to CNPs")
 
 set(CC_MODULES_SUPPORTED DCQCN IDENTITY)
 if(NOT CC_MODULE IN_LIST CC_MODULES_SUPPORTED)

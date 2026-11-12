@@ -77,7 +77,9 @@ void rx_process_ibh(
 			if (!metaWritten) {
 				std::cout << "[RX PROCESS IBH " << INSTID << "]: input psn " << std::hex << bth.getPsn() << std::endl;
                 
-            	metaOut.write(ibhMeta(bth.getOpCode(), bth.getPartitionKey(), bth.getDstQP(), bth.getPsn(), true));
+				ibhMeta rxMeta(bth.getOpCode(), bth.getPartitionKey(), bth.getDstQP(), bth.getPsn(), true);
+				rxMeta.becn = bth.getBecn(); // ECN echo in ACKs (EN_ACK_ECN on the receiver)
+            	metaOut.write(rxMeta);
 				metaOut2.write(bth.getOpCode());
 				metaWritten = true;
 
@@ -292,6 +294,8 @@ void rx_ibh_fsm(
 #ifdef RETRANS_EN
 	stream<rxTimerUpdate>&	rxClearTimer_req,
 	stream<retransUpdate>&	rx2retrans_upd,
+#else
+	stream<ccEvent>& rxIbh2ccSignalTable_ack_req, // CC ACK events (with RETRANS_EN they come from the retransmitter, with RTT)
 #endif
 	ap_uint<32>&		regInvalidPsnDropCount,
 	ap_uint<32>&		regCnpRxCount,
@@ -389,8 +393,8 @@ void rx_ibh_fsm(
 				{
 					std::cout << std::hex <<"[RX IBH FSM " << INSTID << "]: retrans update, psn " << meta.psn << std::endl;
 
-                    // Retrans table update
-					rx2retrans_upd.write(retransUpdate(meta.dest_qp, meta.psn, meta.op_code));
+                    // Retrans table update (ece: BECN of an ACK, forwarded to the CC ACK event)
+					rx2retrans_upd.write(retransUpdate(meta.dest_qp, meta.psn, meta.op_code, meta.becn));
 
                     /*if (meta.op_code != RC_RDMA_READ_RESP_FIRST && meta.op_code != RC_RDMA_READ_RESP_MIDDLE) {
 						// to flow control
@@ -412,6 +416,15 @@ void rx_ibh_fsm(
                 #ifdef DBG_IBV
                     m_axis_dbg.write(psnPkg(meta.op_code, meta.psn, qpState.epsn, 1));
                 #endif
+#else
+				// CC ACK event, no RTT without the retransmitter (non-blocking: CC must never stall RX)
+				if (meta.op_code == RC_ACK && !emeta.isNak && !rxIbh2ccSignalTable_ack_req.full())
+				{
+					ccEvent ackEv(CC_EV_ACK, meta.dest_qp(15,0));
+					ackEv.psn = meta.psn;
+					ackEv.ece = meta.becn;
+					rxIbh2ccSignalTable_ack_req.write(ackEv);
+				}
 #endif
 			}
 			// Check for duplicates
@@ -550,6 +563,7 @@ void rx_exh_fsm(
 	stream<ackEvent>& rx_exhEventMetaFifo,
 	stream<pkgSplit>& rx_pkgSplitTypeFifo,
 	stream<pkgShift>& rx_pkgShiftTypeFifo,
+	stream<ccEvent>& rxExh2ccSignalTable_nak_req, // CC NAK events (non-blocking)
 	ap_uint<32>& regEcnCeRxCount,
 	ap_uint<32>& regEcnEctRxCount
 ) {
@@ -636,9 +650,17 @@ void rx_exh_fsm(
 		}
 		break;
 	case DATA: // TODO merge with DMA_META
+	{
         #ifdef DBG_IBV
             m_axis_dbg.write(psnPkg(meta.op_code, meta.psn, meta.dest_qp, 0));
         #endif
+
+		// ECN echo: the ACK of a CE-marked data packet carries BECN (EN_ACK_ECN). CNPs are sent independently
+		bool ackEce = false;
+#ifdef EN_ACK_ECN
+		ackEce = (ecn == ECN_CE);
+#endif
+		ccEvent nakEv;
 
 		switch(meta.op_code)
 		{
@@ -653,7 +675,7 @@ void rx_exh_fsm(
 			// Update state
 			rxExh2msnTable_upd_req.write(rxMsnReq(meta.dest_qp, dmaMeta.msn+1));
 			// Trigger ACK
-			rx_exhEventMetaFifo.write(ackEvent(meta.dest_qp, meta.psn, false));
+			rx_exhEventMetaFifo.write(ackEvent(meta.dest_qp, meta.psn, false, ackEce));
 			rx_pkgSplitTypeFifo.write(pkgSplit(meta.op_code));
 			rx_pkgShiftTypeFifo.write(pkgShift(SHIFT_NONE, meta.dest_qp));
 
@@ -671,7 +693,7 @@ void rx_exh_fsm(
 			// Update state
 			rxExh2msnTable_upd_req.write(rxMsnReq(meta.dest_qp, dmaMeta.msn+1));
 			// Trigger ACK
-			rx_exhEventMetaFifo.write(ackEvent(meta.dest_qp, meta.psn, false));
+			rx_exhEventMetaFifo.write(ackEvent(meta.dest_qp, meta.psn, false, ackEce));
 			rx_pkgSplitTypeFifo.write(pkgSplit(meta.op_code));
 			rx_pkgShiftTypeFifo.write(pkgShift(SHIFT_NONE, meta.dest_qp));
 
@@ -706,7 +728,7 @@ void rx_exh_fsm(
 				//TODO msn, only for ONLY??
 				rxExh2msnTable_upd_req.write(rxMsnReq(meta.dest_qp, dmaMeta.msn+1, rdmaHeader.getVirtualAddress()+payLoadLength, remainingLength, 1));
 				// Trigger ACK
-				rx_exhEventMetaFifo.write(ackEvent(meta.dest_qp, meta.psn, false));
+				rx_exhEventMetaFifo.write(ackEvent(meta.dest_qp, meta.psn, false, ackEce));
 				rx_pkgSplitTypeFifo.write(pkgSplit(meta.op_code));
 				rx_pkgShiftTypeFifo.write(pkgShift(SHIFT_RETH, meta.dest_qp));
 				pe_fsmState = META;
@@ -734,7 +756,7 @@ void rx_exh_fsm(
 			//TODO msn only on LAST??
 			rxExh2msnTable_upd_req.write(rxMsnReq(meta.dest_qp, dmaMeta.msn+1, dmaMeta.vaddr+payLoadLength, remainingLength, 1));
 			// Trigger ACK
-			rx_exhEventMetaFifo.write(ackEvent(meta.dest_qp, meta.psn, false));
+			rx_exhEventMetaFifo.write(ackEvent(meta.dest_qp, meta.psn, false, ackEce));
 			rx_pkgSplitTypeFifo.write(pkgSplit(meta.op_code));
 			rx_pkgShiftTypeFifo.write(pkgShift(SHIFT_NONE, meta.dest_qp));
 			pe_fsmState = META;
@@ -772,6 +794,14 @@ void rx_exh_fsm(
 #ifdef RETRANS_EN
 				rx2retrans_req.write(retransmission(meta.dest_qp, meta.psn));
 #endif
+				// CC NAK event (non-blocking: CC must never stall RX)
+				if (!rxExh2ccSignalTable_nak_req.full())
+				{
+					nakEv = ccEvent(CC_EV_NAK, meta.dest_qp(15,0));
+					nakEv.psn = meta.psn;
+					nakEv.aux = ackHeader.getSyndrome();
+					rxExh2ccSignalTable_nak_req.write(nakEv);
+				}
 			}
 			/*else
 			{
@@ -826,6 +856,14 @@ void rx_exh_fsm(
                     readReqInit.lst));
 
 			std::cout << "[RX EXH FSM " << INSTID << "]: syndrome: " << std::hex << ackHeader.getSyndrome() << std::endl;
+			// CC NAK event (non-blocking: CC must never stall RX)
+			if (ackHeader.isNAK() && !rxExh2ccSignalTable_nak_req.full())
+			{
+				nakEv = ccEvent(CC_EV_NAK, meta.dest_qp(15,0));
+				nakEv.psn = meta.psn;
+				nakEv.aux = ackHeader.getSyndrome();
+				rxExh2ccSignalTable_nak_req.write(nakEv);
+			}
 #ifdef RETRANS_EN
 			if (ackHeader.isNAK())
 			{
@@ -847,6 +885,7 @@ void rx_exh_fsm(
 			break;
 		} //switch meta_Opcode
 		break;
+	}
 	} //switch
 }
 
@@ -1509,7 +1548,9 @@ void meta_merger(
 
 		tx_connTable_req.write(aev.qpn(15, 0));
 		// PSN used for read response
-		tx_ibhMetaFifo.write(ibhMeta(RC_ACK, key, aev.qpn, aev.psn, aev.validPsn));
+		ibhMeta ackIbhMeta(RC_ACK, key, aev.qpn, aev.psn, aev.validPsn);
+		ackIbhMeta.becn = aev.ece; // ECN echo, set in the ACK's BTH by generate_ibh
+		tx_ibhMetaFifo.write(ackIbhMeta);
 		tx_exhMetaFifo.write(event(aev));
 		std::cout << "[META MERGER " << INSTID << "]: reading from ack event with qpn " << aev.qpn << ", psn " << aev.psn << std::endl;
 	}
@@ -1569,7 +1610,9 @@ void generate_ibh(
 #ifdef RETRANS_EN
 	stream<retransMeta>& tx2retrans_insertMeta,
 #endif
-	stream<BaseTransportHeader<WIDTH> >& tx_ibhHeaderFifo
+	stream<BaseTransportHeader<WIDTH> >& tx_ibhHeaderFifo,
+	volatile ap_uint<32>& cycle_cnt,		// in:  free-running cycle counter, timestamps retransmit entries (RTT)
+	ap_uint<32>& regAckBecnTxCount			// out: ACKs sent with BECN (ECN echo)
 ) {
 #pragma HLS inline off
 #pragma HLS pipeline II=1
@@ -1577,6 +1620,10 @@ void generate_ibh(
 	enum fsmStateType {META, GET_PSN};
 	static fsmStateType gi_state = META;
 	static BaseTransportHeader<WIDTH> header;
+	static ap_uint<32> becnTxCount = 0;
+
+	// Read once: every access to the volatile port is a separate read
+	ap_uint<32> now = cycle_cnt;
 
 	static ibhMeta meta;
 	net_axis<WIDTH> currWord;
@@ -1598,6 +1645,13 @@ void generate_ibh(
 			//PSN only valid for READ_RSP, otherwise we get it in state GET_PSN
 			header.setPsn(meta.psn);
 			header.setDstQP(dstQp); //TODO ist meta.dest_qp required??
+			// ECN echo: only ACKs of CE-marked packets carry it (decided in rx_exh_fsm, EN_ACK_ECN)
+			header.setBecn(meta.becn);
+			if (meta.op_code == RC_ACK && meta.becn)
+			{
+				becnTxCount++;
+				regAckBecnTxCount = becnTxCount;
+			}
 			if (meta.validPSN)
 			{
 				tx_ibhHeaderFifo.write(header);
@@ -1629,7 +1683,7 @@ void generate_ibh(
 
 				//Store Packet descirptor in retransmitter table
 #ifdef RETRANS_EN
-				tx2retrans_insertMeta.write(retransMeta(meta.dest_qp, qpState.req_next_psn, meta.op_code));
+				tx2retrans_insertMeta.write(retransMeta(meta.dest_qp, qpState.req_next_psn, meta.op_code, now));
 #endif
 				std::cout << "[GENERATE IBH " << INSTID << "]: generate header opcode 0x" << std::hex << meta.op_code << " psn " << qpState.req_next_psn << std::endl;
 			}
@@ -2423,7 +2477,14 @@ void ib_transport_protocol(
     ap_uint<32>& regCnpRxCount,
     ap_uint<32>& regCnpRxDropCount,
     ap_uint<32>& regCcSignalInvalidCount,
-    ap_uint<32>& regRateDeniedCount
+    ap_uint<32>& regRateDeniedCount,
+    ap_uint<32>& regCcAckCount,
+    ap_uint<32>& regCcAckEceCount,
+    ap_uint<32>& regCcNakCount,
+    ap_uint<32>& regCcTimeoutCount,
+    ap_uint<32>& regCcEventDropCount,
+    ap_uint<32>& regCcModuleDropCount,
+    ap_uint<32>& regAckBecnTxCount
 ) {
 #pragma HLS INLINE
 
@@ -2591,6 +2652,9 @@ void ib_transport_protocol(
 
 	//CC unit Fifos (streams between the CC components are declared inside cc_unit)
 	static stream<ccEvent> ccSignalTable_cnp_req("ccSignalTable_cnp_req");
+	static stream<ccEvent> ccSignalTable_nak_req("ccSignalTable_nak_req");
+	static stream<ccEvent> ccSignalTable_timeout_req("ccSignalTable_timeout_req");
+	static stream<ccEvent> ccSignalTable_ack_req("ccSignalTable_ack_req");
 	static stream<ap_uint<16>> ccSignalTable_init_req("ccSignalTable_init_req");
 	static stream<ap_uint<16>> txRateTable_init_req("txRateTable_init_req");
 	static stream<ap_uint<16>> txRateTable_lrh_qpn_req("txRateTable_lrh_qpn_req");
@@ -2598,6 +2662,9 @@ void ib_transport_protocol(
 	static stream<ap_uint<16>> txRateTable_hrr_qpn_req("txRateTable_hrr_qpn_req");
 	static stream<bool> txRateTable_hrr_rsp("txRateTable_hrr_rsp");
 	#pragma HLS STREAM depth=2 variable=ccSignalTable_cnp_req
+	#pragma HLS STREAM depth=2 variable=ccSignalTable_nak_req
+	#pragma HLS STREAM depth=2 variable=ccSignalTable_timeout_req
+	#pragma HLS STREAM depth=8 variable=ccSignalTable_ack_req
 	#pragma HLS STREAM depth=2 variable=ccSignalTable_init_req
 	#pragma HLS STREAM depth=2 variable=txRateTable_init_req
 	#pragma HLS STREAM depth=2 variable=txRateTable_lrh_qpn_req
@@ -2606,8 +2673,14 @@ void ib_transport_protocol(
 	#pragma HLS STREAM depth=2 variable=txRateTable_hrr_rsp
 	#if defined(__VITIS_HLS__)
 		#pragma HLS aggregate variable=ccSignalTable_cnp_req compact=bit
+		#pragma HLS aggregate variable=ccSignalTable_nak_req compact=bit
+		#pragma HLS aggregate variable=ccSignalTable_timeout_req compact=bit
+		#pragma HLS aggregate variable=ccSignalTable_ack_req compact=bit
 	#else
 		#pragma HLS DATA_PACK variable=ccSignalTable_cnp_req
+		#pragma HLS DATA_PACK variable=ccSignalTable_nak_req
+		#pragma HLS DATA_PACK variable=ccSignalTable_timeout_req
+		#pragma HLS DATA_PACK variable=ccSignalTable_ack_req
 	#endif
 
 	// MSN Table
@@ -2784,6 +2857,8 @@ void ib_transport_protocol(
 #ifdef RETRANS_EN
 		rxClearTimer_req,
 		rx2retrans_upd,
+#else
+		ccSignalTable_ack_req,
 #endif
 		regInvalidPsnDropCount,
 		regCnpRxCount,
@@ -2824,6 +2899,7 @@ void ib_transport_protocol(
 		//rx_exhNoShiftFifo,
 		rx_pkgSplitTypeFifo,
 		rx_pkgShiftTypeFifo,
+		ccSignalTable_nak_req,
 		regEcnCeRxCount,
 		regEcnEctRxCount
 	);
@@ -2945,7 +3021,9 @@ void ib_transport_protocol(
 #ifdef RETRANS_EN
 		tx2retrans_insertMeta,
 #endif
-		tx_ibhHeaderFifo
+		tx_ibhHeaderFifo,
+		cycle_cnt,
+		regAckBecnTxCount
 	);
 
 	//prependt ib header
@@ -2979,6 +3057,9 @@ void ib_transport_protocol(
 
 	cc_unit<INSTID>(
 		ccSignalTable_cnp_req,
+		ccSignalTable_nak_req,
+		ccSignalTable_timeout_req,
+		ccSignalTable_ack_req,
 		ccSignalTable_init_req,
 		txRateTable_init_req,
 		txRateTable_lrh_qpn_req,
@@ -2987,6 +3068,12 @@ void ib_transport_protocol(
 		txRateTable_hrr_rsp,
 		regCcSignalInvalidCount,
 		regRateDeniedCount,
+		regCcAckCount,
+		regCcAckEceCount,
+		regCcNakCount,
+		regCcTimeoutCount,
+		regCcEventDropCount,
+		regCcModuleDropCount,
 		cycle_cnt
 	);
 
@@ -3024,7 +3111,8 @@ void ib_transport_protocol(
 	transport_timer<INSTID>(
 		rxClearTimer_req,
 		txSetTimer_req,
-		timer2retrans_req
+		timer2retrans_req,
+		ccSignalTable_timeout_req
 	);
 
 	retransmitter<INSTID>(	
@@ -3033,7 +3121,9 @@ void ib_transport_protocol(
 		rx2retrans_req,
 		timer2retrans_req,
 		tx2retrans_insertRequest,
-		retransmitter2exh_eventFifo
+		retransmitter2exh_eventFifo,
+		ccSignalTable_ack_req,
+		cycle_cnt
 	);
 #endif
 
@@ -3068,7 +3158,14 @@ template void ib_transport_protocol<DATA_WIDTH, ninst>(		   	\
     ap_uint<32>& regCnpRxCount,		                       	    \
     ap_uint<32>& regCnpRxDropCount,		                       	    \
     ap_uint<32>& regCcSignalInvalidCount,		                    \
-    ap_uint<32>& regRateDeniedCount		                       	    \
+    ap_uint<32>& regRateDeniedCount,		                       	    \
+    ap_uint<32>& regCcAckCount,		                       	        \
+    ap_uint<32>& regCcAckEceCount,		                       	    \
+    ap_uint<32>& regCcNakCount,		                       	        \
+    ap_uint<32>& regCcTimeoutCount,		                       	    \
+    ap_uint<32>& regCcEventDropCount,		                       	    \
+    ap_uint<32>& regCcModuleDropCount,		                       	    \
+    ap_uint<32>& regAckBecnTxCount		                       	    \
 );
 #else
 #define ib_transport_protocol_spec_decla(ninst)                 \
@@ -3096,7 +3193,14 @@ template void ib_transport_protocol<DATA_WIDTH, ninst>(		   	\
     ap_uint<32>& regCnpRxCount,		                       	    \
     ap_uint<32>& regCnpRxDropCount,		                       	    \
     ap_uint<32>& regCcSignalInvalidCount,		                    \
-    ap_uint<32>& regRateDeniedCount		                       	    \
+    ap_uint<32>& regRateDeniedCount,		                       	    \
+    ap_uint<32>& regCcAckCount,		                       	        \
+    ap_uint<32>& regCcAckEceCount,		                       	    \
+    ap_uint<32>& regCcNakCount,		                       	        \
+    ap_uint<32>& regCcTimeoutCount,		                       	    \
+    ap_uint<32>& regCcEventDropCount,		                       	    \
+    ap_uint<32>& regCcModuleDropCount,		                       	    \
+    ap_uint<32>& regAckBecnTxCount		                       	    \
 );
 #endif
 

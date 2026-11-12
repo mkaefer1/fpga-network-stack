@@ -18,6 +18,8 @@ constexpr double CLOCK_PERIOD_NS = ${CLOCK_PERIOD};
 const uint32_t CC_LINE_RATE_MBPS = ${CC_LINE_RATE_MBPS};
 // CC module compiled into cc_unit (one of: DCQCN, IDENTITY)
 #define CC_MODULE_${CC_MODULE}
+// Echo CE marks of received data packets in their ACKs (BTH BECN bit). CNPs are sent independently
+#cmakedefine EN_ACK_ECN
 
 static const uint32_t PCIE_BATCH_PKG = 12;
 static const uint32_t PCIE_BATCH_SIZE = PMTU * PCIE_BATCH_PKG;

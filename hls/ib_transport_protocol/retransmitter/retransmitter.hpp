@@ -30,6 +30,7 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "../../axi_utils.hpp"
 #include "../ib_transport_protocol.hpp"
+#include "../cc/cc_types.hpp"
 using namespace hls;
 
 const uint32_t META_TABLE_SIZE = 2000;
@@ -41,9 +42,12 @@ struct retransUpdate
 	ap_uint<16> qpn;
 	ap_uint<24> latest_acked_req; //TODO rename?
     ibOpCode op_code;
+	bool		ece; // RC_ACK: BECN set by the receiver (ECN echo), forwarded to the CC ACK event
 	retransUpdate() {}
 	retransUpdate(ap_uint<16> qpn, ap_uint<24> psn, ibOpCode op_code)
-		:qpn(qpn), latest_acked_req(psn), op_code(op_code) {}
+		:qpn(qpn), latest_acked_req(psn), op_code(op_code), ece(false) {}
+	retransUpdate(ap_uint<16> qpn, ap_uint<24> psn, ibOpCode op_code, bool ece)
+		:qpn(qpn), latest_acked_req(psn), op_code(op_code), ece(ece) {}
 };
 
 struct retransRdInit
@@ -73,9 +77,12 @@ struct retransMeta
 	ap_uint<16> qpn;
 	ap_uint<24> psn;
 	ibOpCode	opCode;
+	ap_uint<32> tx_ts; // cycle_cnt when the header was generated, for RTT samples
 	retransMeta() {}
 	retransMeta(ap_uint<16> qpn, ap_uint<24> psn, ibOpCode op)
-		:qpn(qpn), psn(psn), opCode(op){}
+		:qpn(qpn), psn(psn), opCode(op), tx_ts(0) {}
+	retransMeta(ap_uint<16> qpn, ap_uint<24> psn, ibOpCode op, ap_uint<32> tx_ts)
+		:qpn(qpn), psn(psn), opCode(op), tx_ts(tx_ts) {}
 };
 
 struct retransAddrLen
@@ -102,11 +109,12 @@ struct retransEntry
     ap_uint<1>  lst;
     ap_uint<4>  offs;
     ap_uint<1>  host;
+	ap_uint<32> tx_ts;
 	retransEntry() {}
 	retransEntry(ap_uint<16> qpn, ap_uint<24> psn, ibOpCode op, ap_uint<64> laddr, ap_uint<64> raddr, ap_uint<32> len, ap_uint<1> lst, ap_uint<4> offs, ap_uint<1> host)
-		:qpn(qpn), psn(psn), opCode(op), localAddr(laddr), remoteAddr(raddr), length(len), lst(lst), offs(offs), host(host) {}
+		:qpn(qpn), psn(psn), opCode(op), localAddr(laddr), remoteAddr(raddr), length(len), lst(lst), offs(offs), host(host), tx_ts(0) {}
 	retransEntry(retransMeta meta, retransAddrLen addrlen)
-		:qpn(meta.qpn), psn(meta.psn), opCode(meta.opCode), localAddr(addrlen.localAddr), remoteAddr(addrlen.remoteAddr), length(addrlen.length), lst(addrlen.lst), offs(addrlen.offs), host(addrlen.host) {}
+		:qpn(meta.qpn), psn(meta.psn), opCode(meta.opCode), localAddr(addrlen.localAddr), remoteAddr(addrlen.remoteAddr), length(addrlen.length), lst(addrlen.lst), offs(addrlen.offs), host(addrlen.host), tx_ts(meta.tx_ts) {}
 };
 
 struct retransPointerEntry
@@ -149,11 +157,12 @@ struct retransMetaEntry
     ap_uint<1>  lst;
     ap_uint<4>  offs;
     ap_uint<1>  host;
+	ap_uint<32> tx_ts; // cycle_cnt of the first transmission (RTT sample on release)
 	bool valid;
 	bool isTail;
 	retransMetaEntry() {}
 	retransMetaEntry(retransEntry& e)
-		:psn(e.psn), next(0), opCode(e.opCode), localAddr(e.localAddr), remoteAddr(e.remoteAddr), length(e.length), lst(e.lst), offs(e.offs), host(e.host), valid(true), isTail(true) {}
+		:psn(e.psn), next(0), opCode(e.opCode), localAddr(e.localAddr), remoteAddr(e.remoteAddr), length(e.length), lst(e.lst), offs(e.offs), host(e.host), tx_ts(e.tx_ts), valid(true), isTail(true) {}
 	retransMetaEntry(ap_uint<16> next)
 		:next(next) {}
 };
@@ -298,10 +307,26 @@ void process_retransmissions(
 	stream<retransMetaEntry>&		metaRspFifo,
 	stream<ap_uint<16> >&			freeListFifo,
 	stream<ap_uint<16> >&			releaseFifo,
-	stream<retransEvent>&			retrans2event
+	stream<retransEvent>&			retrans2event,
+	stream<ccEvent>&				retrans2cc_ack,	// out: CC ACK events with RTT (non-blocking)
+	volatile ap_uint<32>&			cycle_cnt		// in:  free-running cycle counter (nclk)
 ) {
 #pragma HLS PIPELINE II=1
 #pragma HLS INLINE off
+
+	// Karn's rule: an entry that was retransmitted gives no RTT sample (its ACK may belong to either copy).
+	// Retransmissions always cover the list from some PSN up to the tail, so it is enough to remember,
+	// per QP, the last retransmitted PSN: every released entry up to it is tainted.
+	struct retransTaint {
+		bool		valid;
+		ap_uint<24> psn;
+	};
+	static retransTaint taint_table[MAX_QPS];
+#if defined( __VITIS_HLS__)
+	#pragma HLS bind_storage variable=taint_table type=RAM_2P impl=BRAM
+#else
+	#pragma HLS RESOURCE variable=taint_table core=RAM_2P_BRAM
+#endif
 
 	enum retransStateType {MAIN, INSERT_0, INSERT_1, UPDATE_0, UPDATE_1, RETRANS_0, RETRANS_1, RETRANS_2, TIMER_RETRANS_0};
 	static retransStateType rt_state = MAIN;
@@ -312,6 +337,10 @@ void process_retransmissions(
 	static retransmission retrans;
 	static retransMetaEntry meta; //TODO register needed??
 	static retransPointerEntry ptrMeta;
+
+	// Read once: every access to the volatile port is a separate read
+	ap_uint<32> now = cycle_cnt;
+	ccEvent ackEv;
 
 	switch (rt_state)
 	{
@@ -400,6 +429,14 @@ void process_retransmissions(
 				// Release lock
 				pointerUpdFifo.write(pointerUpdate(update.qpn, ptrMeta));
 				rt_state = MAIN;
+
+				// CC: an ACK that released nothing, no RTT sample
+				if (update.op_code == RC_ACK && !retrans2cc_ack.full()) {
+					ackEv = ccEvent(CC_EV_ACK, update.qpn);
+					ackEv.psn = update.latest_acked_req;
+					ackEv.ece = update.ece;
+					retrans2cc_ack.write(ackEv);
+				}
 			}
 		}
 		break;
@@ -442,6 +479,28 @@ void process_retransmissions(
                     curr = meta.next;
 
                     std::cout << "[PROCESS RETRANSMISSION " << INSTID << "]: state UPDATE_1 ack update, psn " << meta.psn << std::endl;
+
+                    // CC: one released packet per ACK. RTT from its first transmission, unless it was retransmitted
+                    if (update.op_code == RC_ACK) {
+                        retransTaint taint = taint_table[update.qpn];
+                        // PSN at or before the last retransmitted one (24-bit wrap-safe)
+                        ap_uint<24> dist = taint.psn - meta.psn;
+                        bool tainted = taint.valid && (dist < 0x800000);
+                        if (taint.valid && meta.psn == taint.psn) {
+                            taint.valid = false; // last retransmitted packet released, later samples are clean
+                            taint_table[update.qpn] = taint;
+                        }
+
+                        if (!retrans2cc_ack.full()) {
+                            ackEv = ccEvent(CC_EV_ACK, update.qpn);
+                            ackEv.psn = update.latest_acked_req;
+                            ackEv.n_acked = 1;
+                            ackEv.ece = update.ece;
+                            ackEv.rtt_valid = !tainted;
+                            ackEv.rtt = now - meta.tx_ts; // assigned to ap_uint<32>: wrap-safe
+                            retrans2cc_ack.write(ackEv);
+                        }
+                    }
                 }
             }
 
@@ -492,6 +551,10 @@ void process_retransmissions(
 				{
 					std::cout << std::hex << "[PROCESS RETRANSMISSION " << INSTID << "]: retransmitting psn " << meta.psn << std::endl;
 					retrans2event.write(retransEvent(meta.opCode, retrans.qpn, meta.localAddr, meta.remoteAddr, meta.length, meta.psn, meta.lst, meta.offs));
+					retransTaint newTaint;
+					newTaint.valid = true;
+					newTaint.psn = meta.psn;
+					taint_table[retrans.qpn] = newTaint;
 					if (!meta.isTail)
 					{
 						rt_state = RETRANS_2;
@@ -521,6 +584,10 @@ void process_retransmissions(
 				}
 				std::cout << std::hex << "[PROCESS RETRANSMISSION " << INSTID << "]: retransmitting psn " << meta.psn << std::endl;
 				retrans2event.write(retransEvent(meta.opCode, retrans.qpn, meta.localAddr, meta.remoteAddr, meta.length, meta.psn, meta.lst, meta.offs));
+				retransTaint newTaint;
+				newTaint.valid = true;
+				newTaint.psn = meta.psn;
+				taint_table[retrans.qpn] = newTaint;
 			}
 		}
 		break;
@@ -573,7 +640,9 @@ void retransmitter(
 	stream<retransmission>& rx2retrans_req,
 	stream<retransmission>& timer2retrans_req,
 	stream<retransEntry>&	tx2retrans_insertRequest,
-	stream<retransEvent>&	retrans2event
+	stream<retransEvent>&	retrans2event,
+	stream<ccEvent>&		retrans2cc_ack,
+	volatile ap_uint<32>&	cycle_cnt
 ) {
 //#pragma HLS DATAFLOW
 //#pragma HLS INTERFACE ap_ctrl_none register port=return
@@ -616,6 +685,8 @@ void retransmitter(
 		rt_metaRspFifo,
 		rt_freeListFifo,
 		rt_releaseFifo,
-		retrans2event
+		retrans2event,
+		retrans2cc_ack,
+		cycle_cnt
 	);
 }

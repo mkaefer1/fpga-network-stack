@@ -32,6 +32,7 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "../axi_utils.hpp"
 #include "ib_transport_protocol.hpp"
 #include "retransmitter/retransmitter.hpp"
+#include "cc/cc_types.hpp"
 #include <rocev2_config.hpp> //defines MAX_QPS
 
 
@@ -90,7 +91,8 @@ template <int INSTID = 0>
 void transport_timer(	
     stream<rxTimerUpdate>&	rxClearTimer_req,
 	stream<ap_uint<24> >&	txSetTimer_req,
-	stream<retransmission>&	timer2retrans_req
+	stream<retransmission>&	timer2retrans_req,
+	stream<ccEvent>&		timer2ccSignalTable_timeout_req // CC TIMEOUT events (non-blocking)
 ) {
 #pragma HLS PIPELINE II=1
 #pragma HLS INLINE off
@@ -187,6 +189,14 @@ void transport_timer(
                     entry.retries++;
                     //TODO shut QP down if too many retries
                     timer2retrans_req.write(retransmission(checkQP));
+
+                    // CC TIMEOUT event (non-blocking: CC must never stall the timer)
+                    if (!timer2ccSignalTable_timeout_req.full())
+                    {
+                        ccEvent toEv(CC_EV_TIMEOUT, checkQP);
+                        toEv.aux = entry.retries;
+                        timer2ccSignalTable_timeout_req.write(toEv);
+                    }
                 }
             }
         }

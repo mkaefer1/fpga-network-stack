@@ -49,15 +49,20 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  * (same clock, all parallel). The port streams are passed straight to the components; only the streams
  * between the components are declared here.
  *
- *   ccSignalTable_init_req ─┐                                       ┌─ cc_init ──┐
- *   ccSignalTable_cnp_req  ─┴→ cc_signal_table ─→ cc_event_fanout ─┤            ├→ CC module ─→ cc_rate_to_gap ─→ tx_rate_table ⇄ lookups
- *                                                                   └─ cc_event ─┘  (build time)                      txRateTable_init_req ─┘
+ *   ccSignalTable_init_req    ─┐                                       ┌─ cc_init ──┐
+ *   ccSignalTable_cnp_req     ─┤                                       │            │
+ *   ccSignalTable_nak_req     ─┼→ cc_signal_table ─→ cc_event_fanout ─┤            ├→ CC module ─→ cc_rate_to_gap ─→ tx_rate_table ⇄ lookups
+ *   ccSignalTable_timeout_req ─┤                                       │            │  (build time)                      txRateTable_init_req ─┘
+ *   ccSignalTable_ack_req     ─┘                                       └─ cc_event ─┘
  *
  * The CC module is chosen at build time (CC_MODULE). Phase 3 compiles several modules in and selects one at runtime.
  */
 template <int INSTID = 0>
 void cc_unit(
     hls::stream<ccEvent>& ccSignalTable_cnp_req,         // in:  CNPs (rx_ibh_fsm)
+    hls::stream<ccEvent>& ccSignalTable_nak_req,         // in:  NAKs (rx_exh_fsm)
+    hls::stream<ccEvent>& ccSignalTable_timeout_req,     // in:  timeouts (transport_timer)
+    hls::stream<ccEvent>& ccSignalTable_ack_req,         // in:  ACKs (retransmitter, or rx_ibh_fsm without RETRANS_EN)
     hls::stream<ap_uint<16> >& ccSignalTable_init_req,   // in:  QP setup (qp_interface)
     hls::stream<ap_uint<16> >& txRateTable_init_req,     // in:  QP setup (qp_interface)
     hls::stream<ap_uint<16> >& txRateTable_lrh_qpn_req,  // in:  rate lookup (local_req_handler)
@@ -66,6 +71,12 @@ void cc_unit(
     hls::stream<bool>& txRateTable_hrr_rsp,              // out: rate lookup response (true = may send now)
     ap_uint<32>& regCcSignalInvalidCount,                // out: counter, signals dropped (QP invalid)
     ap_uint<32>& regRateDeniedCount,                     // out: counter, rate lookups answered "denied"
+    ap_uint<32>& regCcAckCount,                          // out: counter, ACK events
+    ap_uint<32>& regCcAckEceCount,                       // out: counter, ACK events with ECN echo
+    ap_uint<32>& regCcNakCount,                          // out: counter, NAK events
+    ap_uint<32>& regCcTimeoutCount,                      // out: counter, TIMEOUT events
+    ap_uint<32>& regCcEventDropCount,                    // out: counter, events dropped at the fanout input
+    ap_uint<32>& regCcModuleDropCount,                   // out: counter, events dropped at the module's signal FIFO
     volatile ap_uint<32>& cycle_cnt                      // in:  free-running cycle counter (nclk)
 ) {
     #pragma HLS INLINE
@@ -99,15 +110,24 @@ void cc_unit(
     cc_signal_table<INSTID>(
         ccSignalTable_init_req,
         ccSignalTable_cnp_req,
+        ccSignalTable_nak_req,
+        ccSignalTable_timeout_req,
+        ccSignalTable_ack_req,
         cc_event_to_fanout,
         regCcSignalInvalidCount,
+        regCcAckCount,
+        regCcAckEceCount,
+        regCcNakCount,
+        regCcTimeoutCount,
+        regCcEventDropCount,
         cycle_cnt
     );
 
     cc_event_fanout<INSTID>(
         cc_event_to_fanout,
         mod_cc_init,
-        mod_cc_event
+        mod_cc_event,
+        regCcModuleDropCount
     );
 
 #if defined(CC_MODULE_IDENTITY)

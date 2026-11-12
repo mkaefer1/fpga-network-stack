@@ -81,6 +81,13 @@ void rocev2(
     ap_uint<32>& regCnpRxCount,
     ap_uint<32>& regCnpRxDropCount,
     ap_uint<32>& regCcSignalInvalidCount,
-    ap_uint<32>& regRateDeniedCount
+    ap_uint<32>& regRateDeniedCount,
+    ap_uint<32>& regCcAckCount,
+    ap_uint<32>& regCcAckEceCount,
+    ap_uint<32>& regCcNakCount,
+    ap_uint<32>& regCcTimeoutCount,
+    ap_uint<32>& regCcEventDropCount,
+    ap_uint<32>& regCcModuleDropCount,
+    ap_uint<32>& regAckBecnTxCount
 );
 
