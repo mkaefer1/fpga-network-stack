@@ -16,8 +16,9 @@ constexpr double CLOCK_PERIOD_NS = ${CLOCK_PERIOD};
 // Congestion control
 // Line rate of the link in Mb/s (rates are converted to inter-packet gaps relative to it)
 const uint32_t CC_LINE_RATE_MBPS = ${CC_LINE_RATE_MBPS};
-// CC module compiled into cc_unit (one of: DCQCN, IDENTITY)
-#define CC_MODULE_${CC_MODULE}
+// CC modules compiled into cc_unit (CC_MOD_<NAME>), all run in parallel. The active one is chosen at runtime
+${CC_MODULE_DEFINES}// Active after reset, until software writes the module select register (ID from cc_types.hpp)
+#define CC_DEFAULT_MODULE_ID CC_MOD_ID_${CC_DEFAULT_MODULE}
 // Echo CE marks of received data packets in their ACKs (BTH BECN bit). CNPs are sent independently
 #cmakedefine EN_ACK_ECN
 

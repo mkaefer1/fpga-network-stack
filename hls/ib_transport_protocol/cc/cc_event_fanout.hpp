@@ -28,26 +28,29 @@
 
 #include "../../axi_utils.hpp"
 #include "cc_types.hpp"
+#include "cc_modules.hpp"
 
 /**
- * Hands every event from cc_signal_table to the CC module(s). Each module owns two input FIFOs:
+ * Hands a copy of every event from cc_signal_table to every compiled-in CC module.
+ * All modules run all the time, so a module switched to at runtime already has warm per-QP state.
+ *
+ * Each module owns two input FIFOs:
  *   - cc_init:  INIT events only, written blocking. A lost INIT would leave the module without the QP.
  *               INITs only happen at QP setup, so this stall never touches the datapath.
- *   - cc_event: all other signals in arrival order, written non-blocking. If the module falls behind,
- *               the signal is dropped for that module only and never back-pressures the stack.
+ *   - cc_event: all other signals in arrival order, written non-blocking. If a module falls behind,
+ *               the signal is dropped for that module only and never back-pressures the stack or the
+ *               other modules.
  *
  * Ordering: cc_signal_table emits a QP's INIT before any of its signals, and modules drain cc_init
- * first, so a module always processes a QP's INIT before its first signal.
- *
- * Phase 1: one module (selected at build time). Phase 3 adds one FIFO pair per compiled-in module
- * plus the external port; every destination then gets its own copy of each event.
+ * first, so every module processes a QP's INIT before its first signal.
  */
 template <int INSTID = 0>
 void cc_event_fanout(
-    hls::stream<ccEvent>& cc_event_in,   // in:  events from cc_signal_table
-    hls::stream<ccEvent>& mod_cc_init,   // out: module INIT FIFO (blocking)
-    hls::stream<ccEvent>& mod_cc_event,  // out: module signal FIFO (non-blocking)
-    ap_uint<32>& regCcModuleDropCount    // out: signals dropped because the module's signal FIFO was full
+    hls::stream<ccEvent>& cc_event_in,                       // in:  events from cc_signal_table
+    hls::stream<ccEvent> mod_cc_init[CC_N_INT_MODULES],      // out: per-module INIT FIFO (blocking)
+    hls::stream<ccEvent> mod_cc_event[CC_N_INT_MODULES],     // out: per-module signal FIFO (non-blocking)
+    volatile ap_uint<8>& cc_module_sel,                      // in:  module select register (CC_MOD_SEL_DEFAULT = build default)
+    ap_uint<32>& regCcModuleDropCount                        // out: signals dropped for the ACTIVE module (its FIFO was full)
 ) {
     #pragma HLS PIPELINE II=1
     #pragma HLS INLINE off
@@ -55,16 +58,31 @@ void cc_event_fanout(
     static ap_uint<32> moduleDropCount = 0;
     ccEvent ev;
 
+    // Read once: every access to the volatile port is a separate read
+    ap_uint<8> active = cc_active_module(cc_module_sel);
+
     if (!cc_event_in.empty()) {
         cc_event_in.read(ev);
         if (ev.type == CC_EV_INIT) {
-            mod_cc_init.write(ev); // Blocking: INIT must never be lost
-        } else if (!mod_cc_event.full()) {
-            mod_cc_event.write(ev);
+            for (int i = 0; i < CC_N_INT_MODULES; i++) {
+                #pragma HLS UNROLL
+                mod_cc_init[i].write(ev); // Blocking: INIT must never be lost
+            }
         } else {
-            // Dropped for this module only (phase 3: one counter per module)
-            moduleDropCount++;
-            regCcModuleDropCount = moduleDropCount;
+            bool activeDropped = false;
+            for (int i = 0; i < CC_N_INT_MODULES; i++) {
+                #pragma HLS UNROLL
+                if (!mod_cc_event[i].full()) {
+                    mod_cc_event[i].write(ev);
+                } else if (CC_SLOT_ID[i] == active) {
+                    activeDropped = true;
+                }
+                // Drops of inactive (shadow) modules are not counted
+            }
+            if (activeDropped) {
+                moduleDropCount++;
+                regCcModuleDropCount = moduleDropCount;
+            }
         }
     }
 }

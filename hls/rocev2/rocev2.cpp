@@ -49,6 +49,7 @@ void rocev2(
 	hls::stream<ifConnReq>&	s_axis_qp_conn_interface,
 	ap_uint<128> local_ip_address,
 	volatile ap_uint<32>& cycle_cnt,
+	volatile ap_uint<8>& cc_module_sel,
 
 	//Debug output
 #ifdef DBG_IBV
@@ -175,6 +176,7 @@ void rocev2(
 		s_axis_qp_interface,
 		s_axis_qp_conn_interface,
 		cycle_cnt,
+		cc_module_sel,
 #ifdef DBG_IBV
 		m_axis_dbg_0,
 		m_axis_dbg_1,
@@ -222,6 +224,7 @@ void rocev2_top(
 	stream<ifConnReq>& s_axis_qp_conn_interface,
 	ap_uint<128> local_ip_address,
 	volatile ap_uint<32>& cycle_cnt,
+	volatile ap_uint<8>& cc_module_sel,
 
 	//Debug output
 #ifdef DBG_IBV
@@ -280,12 +283,14 @@ void rocev2_top(
 
 	#pragma HLS INTERFACE ap_none register port=local_ip_address
 	#pragma HLS INTERFACE ap_none register port=cycle_cnt
+	#pragma HLS INTERFACE ap_none register port=cc_module_sel
 	// Scalar inputs of the free-running dataflow region: without `stable`, HLS copies them into FIFOs
 	// from an entry_proc that also gives start tokens to their readers. entry_proc then runs at the pace
 	// of the slowest reader (II>1 CC processes), and ipv4_generate_ipv4 got one local_ip_address per
 	// 3 cycles, capping TX at ~41 Gb/s. `stable` wires the ports straight into the processes instead
 	#pragma HLS stable variable=local_ip_address
 	#pragma HLS stable variable=cycle_cnt
+	#pragma HLS stable variable=cc_module_sel
 
 	//DEBUG
 #ifdef DBG_IBV
@@ -331,6 +336,7 @@ void rocev2_top(
 		s_axis_qp_conn_interface,
 		local_ip_address,
 		cycle_cnt,
+		cc_module_sel,
 
 #ifdef DBG_IBV
 		m_axis_dbg_0,
@@ -378,6 +384,7 @@ void rocev2_top(
 	stream<ifConnReq>& s_axis_qp_conn_interface,
 	ap_uint<128> local_ip_address,
 	volatile ap_uint<32>& cycle_cnt,
+	volatile ap_uint<8>& cc_module_sel,
 
 	//Debug output
 #ifdef DBG_IBV
@@ -436,9 +443,11 @@ void rocev2_top(
 
 	#pragma HLS INTERFACE ap_none register port=local_ip_address
 	#pragma HLS INTERFACE ap_none register port=cycle_cnt
+	#pragma HLS INTERFACE ap_none register port=cc_module_sel
 	// See the Vitis branch: keep the scalar inputs out of the dataflow FIFO/start-token logic
 	#pragma HLS stable variable=local_ip_address
 	#pragma HLS stable variable=cycle_cnt
+	#pragma HLS stable variable=cc_module_sel
 
 	//DEBUG
 #ifdef DBG_IBV
@@ -468,6 +477,7 @@ void rocev2_top(
 		s_axis_qp_conn_interface,
 		local_ip_address,
 		cycle_cnt,
+		cc_module_sel,
 
 #ifdef DBG_IBV
 		m_axis_dbg_0,

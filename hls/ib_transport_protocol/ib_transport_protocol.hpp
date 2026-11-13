@@ -636,6 +636,7 @@ void ib_transport_protocol(
 	hls::stream<qpContext>&	s_axis_qp_interface,
 	hls::stream<ifConnReq>&	s_axis_qp_conn_interface,
 	volatile ap_uint<32>& cycle_cnt,
+	volatile ap_uint<8>& cc_module_sel, // active CC module ID (0xFF: build default)
 
 	// Debug
 #ifdef DBG_IBV

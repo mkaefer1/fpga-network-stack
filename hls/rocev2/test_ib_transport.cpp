@@ -25,6 +25,7 @@
  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 #include "rocev2.hpp"
+#include "../ib_transport_protocol/cc/cc_types.hpp" // CC_MOD_SEL_DEFAULT
 #include <fstream>
 #include <vector>
 #include <sys/types.h>
@@ -91,6 +92,7 @@ using namespace hls;
         s_axis_qp_interface_n##ninst,               \
         s_axis_qp_conn_interface_n##ninst,          \
         cycle_cnt,                                  \
+        cc_module_sel,                              \
         m_axis_dbg_0_n##ninst,                      \
         m_axis_dbg_1_n##ninst,                      \
         m_axis_dbg_2_n##ninst,                      \
@@ -216,6 +218,7 @@ int main(int argc, char* argv[]){
 
     // Stands in for the free-running cycle counter in roce_stack.sv: one simulation step = one cycle, shared by both nodes
     ap_uint<32> cycle_cnt = 0;
+    ap_uint<8> cc_module_sel = CC_MOD_SEL_DEFAULT; // build default module (CC_DEFAULT_MODULE)
 
     int count = 0;
     //Make sure it is initialized

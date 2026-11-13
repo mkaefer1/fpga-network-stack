@@ -2460,6 +2460,7 @@ void ib_transport_protocol(
 	stream<qpContext>& s_axis_qp_interface,
 	stream<ifConnReq>& s_axis_qp_conn_interface,
 	volatile ap_uint<32>& cycle_cnt,
+	volatile ap_uint<8>& cc_module_sel,
 
 	// Debug
 #ifdef DBG_IBV
@@ -3074,7 +3075,8 @@ void ib_transport_protocol(
 		regCcTimeoutCount,
 		regCcEventDropCount,
 		regCcModuleDropCount,
-		cycle_cnt
+		cycle_cnt,
+		cc_module_sel
 	);
 
 	msn_table<INSTID>(
@@ -3145,6 +3147,7 @@ template void ib_transport_protocol<DATA_WIDTH, ninst>(		   	\
 	stream<qpContext>& s_axis_qp_interface,		               	\
 	stream<ifConnReq>& s_axis_qp_conn_interface,		        \
 	volatile ap_uint<32>& cycle_cnt,		                    \
+	volatile ap_uint<8>& cc_module_sel,		                    \
 	stream<psnPkg>& m_axis_dbg_0,		                        \
     stream<psnPkg>& m_axis_dbg_1,		                        \
     stream<psnPkg>& m_axis_dbg_2,		                        \
@@ -3183,6 +3186,7 @@ template void ib_transport_protocol<DATA_WIDTH, ninst>(		   	\
 	stream<qpContext>& s_axis_qp_interface,		               	\
 	stream<ifConnReq>& s_axis_qp_conn_interface,		        \
 	volatile ap_uint<32>& cycle_cnt,		                    \
+	volatile ap_uint<8>& cc_module_sel,		                    \
 	ap_uint<32>& regInvalidPsnDropCount,		                \
     ap_uint<32>& regRetransCount,		                        \
 	ap_uint<32>& regIbvCountRx,		                       	    \

@@ -31,31 +31,27 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "../../axi_utils.hpp"
 #include "cc_types.hpp"
 #include "cc_signal_table.hpp"
+#include "cc_modules.hpp"
 #include "cc_event_fanout.hpp"
+#include "cc_rate_mux.hpp"
 #include "cc_rate_to_gap.hpp"
 #include "tx_rate_table.hpp"
-#include "cc_modules/identity.hpp"
-#include "cc_modules/dcqcn.hpp"
-#include <rocev2_config.hpp> // CC_MODULE_<NAME>
-
-#if (defined(CC_MODULE_DCQCN) + defined(CC_MODULE_IDENTITY)) != 1
-#error "Exactly one CC module must be selected (CC_MODULE in rocev2/CMakeLists.txt: DCQCN or IDENTITY)"
-#endif
 
 /**
- * Congestion-control unit: groups the CC components behind one call.
+ * Congestion-control unit: groups the CC components behind one call (see custom-wiki/cc-architecture-plan.md).
  *
  * Inlined, so after synthesis its processes are ordinary processes of the enclosing dataflow region
  * (same clock, all parallel). The port streams are passed straight to the components; only the streams
  * between the components are declared here.
  *
- *   ccSignalTable_init_req    ─┐                                       ┌─ cc_init ──┐
- *   ccSignalTable_cnp_req     ─┤                                       │            │
- *   ccSignalTable_nak_req     ─┼→ cc_signal_table ─→ cc_event_fanout ─┤            ├→ CC module ─→ cc_rate_to_gap ─→ tx_rate_table ⇄ lookups
- *   ccSignalTable_timeout_req ─┤                                       │            │  (build time)                      txRateTable_init_req ─┘
- *   ccSignalTable_ack_req     ─┘                                       └─ cc_event ─┘
+ *   ccSignalTable_init_req    ─┐                                       ┌─ cc_init/cc_event ─→ DCQCN    ─┐
+ *   ccSignalTable_cnp_req     ─┤                                       │                                │
+ *   ccSignalTable_nak_req     ─┼→ cc_signal_table ─→ cc_event_fanout ─┼─ cc_init/cc_event ─→ IDENTITY ─┼→ cc_rate_mux ─→ cc_rate_to_gap ─→ tx_rate_table ⇄ lookups
+ *   ccSignalTable_timeout_req ─┤                                       │                                │   (active module)               txRateTable_init_req ─┘
+ *   ccSignalTable_ack_req     ─┘                                       └─ ...  (all of CC_MODULES)    ─┘
  *
- * The CC module is chosen at build time (CC_MODULE). Phase 3 compiles several modules in and selects one at runtime.
+ * All compiled-in modules (CC_MODULES) run in parallel on copies of every event. cc_module_sel picks the
+ * one whose rates reach tx_rate_table (CC_MOD_SEL_DEFAULT = CC_DEFAULT_MODULE).
  */
 template <int INSTID = 0>
 void cc_unit(
@@ -76,34 +72,39 @@ void cc_unit(
     ap_uint<32>& regCcNakCount,                          // out: counter, NAK events
     ap_uint<32>& regCcTimeoutCount,                      // out: counter, TIMEOUT events
     ap_uint<32>& regCcEventDropCount,                    // out: counter, events dropped at the fanout input
-    ap_uint<32>& regCcModuleDropCount,                   // out: counter, events dropped at the module's signal FIFO
-    volatile ap_uint<32>& cycle_cnt                      // in:  free-running cycle counter (nclk)
+    ap_uint<32>& regCcModuleDropCount,                   // out: counter, events dropped at the active module's signal FIFO
+    volatile ap_uint<32>& cycle_cnt,                     // in:  free-running cycle counter (nclk)
+    volatile ap_uint<8>& cc_module_sel                   // in:  active module ID, CC_MOD_SEL_DEFAULT = build default
 ) {
     #pragma HLS INLINE
 
-    // Streams between the CC components
+    // Streams between the CC components. One INIT FIFO, signal FIFO and rate FIFO per compiled-in module (slot)
     static hls::stream<ccEvent> cc_event_to_fanout("cc_event_to_fanout");
-    static hls::stream<ccEvent> mod_cc_init("mod_cc_init");
-    static hls::stream<ccEvent> mod_cc_event("mod_cc_event");
-    static hls::stream<ccRateUpd> mod_cc_rate_upd("mod_cc_rate_upd");
+    static hls::stream<ccEvent> mod_cc_init[CC_N_INT_MODULES];
+    static hls::stream<ccEvent> mod_cc_event[CC_N_INT_MODULES];
+    static hls::stream<ccRateUpd> mod_cc_rate_upd[CC_N_INT_MODULES];
+    static hls::stream<ccRateUpd> cc_rate_upd("cc_rate_upd");
     static hls::stream<txRateReq> txRateTable_upd_req("txRateTable_upd_req");
     #pragma HLS STREAM depth=4 variable=cc_event_to_fanout
     #pragma HLS STREAM depth=4 variable=mod_cc_init
     // mod_cc_event absorbs signal bursts at module II <= 9
     #pragma HLS STREAM depth=32 variable=mod_cc_event
     #pragma HLS STREAM depth=2 variable=mod_cc_rate_upd
+    #pragma HLS STREAM depth=2 variable=cc_rate_upd
     #pragma HLS STREAM depth=2 variable=txRateTable_upd_req
     #if defined(__VITIS_HLS__)
         #pragma HLS aggregate variable=cc_event_to_fanout compact=bit
         #pragma HLS aggregate variable=mod_cc_init compact=bit
         #pragma HLS aggregate variable=mod_cc_event compact=bit
         #pragma HLS aggregate variable=mod_cc_rate_upd compact=bit
+        #pragma HLS aggregate variable=cc_rate_upd compact=bit
         #pragma HLS aggregate variable=txRateTable_upd_req compact=bit
     #else
         #pragma HLS DATA_PACK variable=cc_event_to_fanout
         #pragma HLS DATA_PACK variable=mod_cc_init
         #pragma HLS DATA_PACK variable=mod_cc_event
         #pragma HLS DATA_PACK variable=mod_cc_rate_upd
+        #pragma HLS DATA_PACK variable=cc_rate_upd
         #pragma HLS DATA_PACK variable=txRateTable_upd_req
     #endif
 
@@ -127,27 +128,36 @@ void cc_unit(
         cc_event_to_fanout,
         mod_cc_init,
         mod_cc_event,
+        cc_module_sel,
         regCcModuleDropCount
     );
 
-#if defined(CC_MODULE_IDENTITY)
-    identity_cc_module<INSTID>(
-        mod_cc_init,
-        mod_cc_event,
-        mod_cc_rate_upd,
+    // All compiled-in modules, each on its own slot (cc_modules.hpp)
+#ifdef CC_MOD_DCQCN
+    dcqcn_cc_module<INSTID>(
+        mod_cc_init[CC_SLOT_DCQCN],
+        mod_cc_event[CC_SLOT_DCQCN],
+        mod_cc_rate_upd[CC_SLOT_DCQCN],
         cycle_cnt
     );
-#else // CC_MODULE_DCQCN
-    dcqcn_cc_module<INSTID>(
-        mod_cc_init,
-        mod_cc_event,
-        mod_cc_rate_upd,
+#endif
+#ifdef CC_MOD_IDENTITY
+    identity_cc_module<INSTID>(
+        mod_cc_init[CC_SLOT_IDENTITY],
+        mod_cc_event[CC_SLOT_IDENTITY],
+        mod_cc_rate_upd[CC_SLOT_IDENTITY],
         cycle_cnt
     );
 #endif
 
-    cc_rate_to_gap<INSTID>(
+    cc_rate_mux<INSTID>(
         mod_cc_rate_upd,
+        cc_rate_upd,
+        cc_module_sel
+    );
+
+    cc_rate_to_gap<INSTID>(
+        cc_rate_upd,
         txRateTable_upd_req
     );
 

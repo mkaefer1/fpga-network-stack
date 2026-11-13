@@ -74,6 +74,24 @@ struct ccEvent {
 };
 
 // ------------------------------------------------------------------------------------------------
+// Module IDs: fixed per module, so software can select modules by name (sw cDefs.hpp: CcModule)
+// ------------------------------------------------------------------------------------------------
+
+static const uint8_t CC_MOD_ID_DCQCN    = 0;
+static const uint8_t CC_MOD_ID_IDENTITY = 1;
+// 2-15: future internal (HLS) modules, 16+: external modules (phase 4)
+
+// Module select register (shell CC_MODULE_SEL_REG): this value means "the build default" (CC_DEFAULT_MODULE).
+// It is the reset value, so neither the shell nor software needs to know which module the build defaults to
+static const uint8_t CC_MOD_SEL_DEFAULT = 0xFF;
+
+// ID of the active module for a select register value
+inline ap_uint<8> cc_active_module(ap_uint<8> sel) {
+    #pragma HLS INLINE
+    return (sel == CC_MOD_SEL_DEFAULT) ? ap_uint<8>(CC_DEFAULT_MODULE_ID) : sel;
+}
+
+// ------------------------------------------------------------------------------------------------
 // Rates: the common output of every CC module
 // ------------------------------------------------------------------------------------------------
 
