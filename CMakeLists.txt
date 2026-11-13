@@ -33,4 +33,11 @@ endif()
 
 if(EN_RDMA)
    add_subdirectory(hls/rocev2)
+
+   # External congestion-control modules: one HLS IP each, hls/cc_ext/<name without EXT_, lower case>
+   foreach(CC_EXT_MOD IN LISTS CC_EXT_MODULES)
+      string(TOLOWER ${CC_EXT_MOD} CC_EXT_DIR)
+      string(REGEX REPLACE "^ext_" "" CC_EXT_DIR ${CC_EXT_DIR})
+      add_subdirectory(hls/cc_ext/${CC_EXT_DIR})
+   endforeach()
 endif()

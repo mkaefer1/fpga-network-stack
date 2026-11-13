@@ -610,6 +610,8 @@ struct rtrPkg
 		: r1(r1), r2(r2), ctl(ctl) {}
 };
 
+#include "cc/cc_types.hpp" // ccEvent, ccExtRateUpd (external CC module ports)
+
 template <int WIDTH, int INSTID>
 void ib_transport_protocol(	
 	// RX - net module
@@ -637,6 +639,9 @@ void ib_transport_protocol(
 	hls::stream<ifConnReq>&	s_axis_qp_conn_interface,
 	volatile ap_uint<32>& cycle_cnt,
 	volatile ap_uint<8>& cc_module_sel, // active CC module ID (0xFF: build default)
+	hls::stream<ccEvent>& m_axis_cc_init,       // external CC modules: INIT events
+	hls::stream<ccEvent>& m_axis_cc_event,      // external CC modules: signals
+	hls::stream<ccExtRateUpd>& s_axis_cc_rate,  // external CC modules: rate updates
 
 	// Debug
 #ifdef DBG_IBV

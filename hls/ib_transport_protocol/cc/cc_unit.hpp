@@ -48,7 +48,8 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *   ccSignalTable_cnp_req     ─┤                                       │                                │
  *   ccSignalTable_nak_req     ─┼→ cc_signal_table ─→ cc_event_fanout ─┼─ cc_init/cc_event ─→ IDENTITY ─┼→ cc_rate_mux ─→ cc_rate_to_gap ─→ tx_rate_table ⇄ lookups
  *   ccSignalTable_timeout_req ─┤                                       │                                │   (active module)               txRateTable_init_req ─┘
- *   ccSignalTable_ack_req     ─┘                                       └─ ...  (all of CC_MODULES)    ─┘
+ *   ccSignalTable_ack_req     ─┘                                       ├─ ...  (all of CC_MODULES)    ─┤
+ *                                                                       └─ m_axis_cc_init/event ─→ SV cc_ext_modules (CC_EXT_MODULES) ─→ s_axis_cc_rate
  *
  * All compiled-in modules (CC_MODULES) run in parallel on copies of every event. cc_module_sel picks the
  * one whose rates reach tx_rate_table (CC_MOD_SEL_DEFAULT = CC_DEFAULT_MODULE).
@@ -74,7 +75,10 @@ void cc_unit(
     ap_uint<32>& regCcEventDropCount,                    // out: counter, events dropped at the fanout input
     ap_uint<32>& regCcModuleDropCount,                   // out: counter, events dropped at the active module's signal FIFO
     volatile ap_uint<32>& cycle_cnt,                     // in:  free-running cycle counter (nclk)
-    volatile ap_uint<8>& cc_module_sel                   // in:  active module ID, CC_MOD_SEL_DEFAULT = build default
+    volatile ap_uint<8>& cc_module_sel,                  // in:  active module ID, CC_MOD_SEL_DEFAULT = build default
+    hls::stream<ccEvent>& m_axis_cc_init,                // out: INIT events to the external modules
+    hls::stream<ccEvent>& m_axis_cc_event,               // out: signals to the external modules
+    hls::stream<ccExtRateUpd>& s_axis_cc_rate            // in:  rate updates of the external modules
 ) {
     #pragma HLS INLINE
 
@@ -128,6 +132,8 @@ void cc_unit(
         cc_event_to_fanout,
         mod_cc_init,
         mod_cc_event,
+        m_axis_cc_init,
+        m_axis_cc_event,
         cc_module_sel,
         regCcModuleDropCount
     );
@@ -152,6 +158,7 @@ void cc_unit(
 
     cc_rate_mux<INSTID>(
         mod_cc_rate_upd,
+        s_axis_cc_rate,
         cc_rate_upd,
         cc_module_sel
     );

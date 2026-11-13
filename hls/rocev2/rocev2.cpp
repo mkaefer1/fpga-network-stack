@@ -50,6 +50,9 @@ void rocev2(
 	ap_uint<128> local_ip_address,
 	volatile ap_uint<32>& cycle_cnt,
 	volatile ap_uint<8>& cc_module_sel,
+	hls::stream<ccEvent>& m_axis_cc_init,       // external CC modules: INIT events
+	hls::stream<ccEvent>& m_axis_cc_event,      // external CC modules: signals
+	hls::stream<ccExtRateUpd>& s_axis_cc_rate,  // external CC modules: rate updates
 
 	//Debug output
 #ifdef DBG_IBV
@@ -177,6 +180,9 @@ void rocev2(
 		s_axis_qp_conn_interface,
 		cycle_cnt,
 		cc_module_sel,
+		m_axis_cc_init,
+		m_axis_cc_event,
+		s_axis_cc_rate,
 #ifdef DBG_IBV
 		m_axis_dbg_0,
 		m_axis_dbg_1,
@@ -225,6 +231,9 @@ void rocev2_top(
 	ap_uint<128> local_ip_address,
 	volatile ap_uint<32>& cycle_cnt,
 	volatile ap_uint<8>& cc_module_sel,
+	hls::stream<ccEvent>& m_axis_cc_init,       // external CC modules: INIT events
+	hls::stream<ccEvent>& m_axis_cc_event,      // external CC modules: signals
+	hls::stream<ccExtRateUpd>& s_axis_cc_rate,  // external CC modules: rate updates
 
 	//Debug output
 #ifdef DBG_IBV
@@ -292,6 +301,20 @@ void rocev2_top(
 	#pragma HLS stable variable=cycle_cnt
 	#pragma HLS stable variable=cc_module_sel
 
+	// External CC modules (SV cc_ext_modules, tied off when CC_EXT_MODULES is empty)
+	#pragma HLS INTERFACE axis register port=m_axis_cc_init
+	#pragma HLS INTERFACE axis register port=m_axis_cc_event
+	#pragma HLS INTERFACE axis register port=s_axis_cc_rate
+#if defined( __VITIS_HLS__)
+	#pragma HLS aggregate  variable=m_axis_cc_init compact=bit
+	#pragma HLS aggregate  variable=m_axis_cc_event compact=bit
+	#pragma HLS aggregate  variable=s_axis_cc_rate compact=bit
+#else
+	#pragma HLS DATA_PACK variable=m_axis_cc_init
+	#pragma HLS DATA_PACK variable=m_axis_cc_event
+	#pragma HLS DATA_PACK variable=s_axis_cc_rate
+#endif
+
 	//DEBUG
 #ifdef DBG_IBV
 	#pragma HLS INTERFACE axis register port=m_axis_dbg_0
@@ -337,6 +360,9 @@ void rocev2_top(
 		local_ip_address,
 		cycle_cnt,
 		cc_module_sel,
+		m_axis_cc_init,
+		m_axis_cc_event,
+		s_axis_cc_rate,
 
 #ifdef DBG_IBV
 		m_axis_dbg_0,
@@ -385,6 +411,9 @@ void rocev2_top(
 	ap_uint<128> local_ip_address,
 	volatile ap_uint<32>& cycle_cnt,
 	volatile ap_uint<8>& cc_module_sel,
+	hls::stream<ccEvent>& m_axis_cc_init,       // external CC modules: INIT events
+	hls::stream<ccEvent>& m_axis_cc_event,      // external CC modules: signals
+	hls::stream<ccExtRateUpd>& s_axis_cc_rate,  // external CC modules: rate updates
 
 	//Debug output
 #ifdef DBG_IBV
@@ -449,6 +478,20 @@ void rocev2_top(
 	#pragma HLS stable variable=cycle_cnt
 	#pragma HLS stable variable=cc_module_sel
 
+	// External CC modules (SV cc_ext_modules, tied off when CC_EXT_MODULES is empty)
+	#pragma HLS INTERFACE axis register port=m_axis_cc_init
+	#pragma HLS INTERFACE axis register port=m_axis_cc_event
+	#pragma HLS INTERFACE axis register port=s_axis_cc_rate
+#if defined( __VITIS_HLS__)
+	#pragma HLS aggregate  variable=m_axis_cc_init compact=bit
+	#pragma HLS aggregate  variable=m_axis_cc_event compact=bit
+	#pragma HLS aggregate  variable=s_axis_cc_rate compact=bit
+#else
+	#pragma HLS DATA_PACK variable=m_axis_cc_init
+	#pragma HLS DATA_PACK variable=m_axis_cc_event
+	#pragma HLS DATA_PACK variable=s_axis_cc_rate
+#endif
+
 	//DEBUG
 #ifdef DBG_IBV
 	#pragma HLS INTERFACE axis register port=m_axis_dbg_0
@@ -478,6 +521,9 @@ void rocev2_top(
 		local_ip_address,
 		cycle_cnt,
 		cc_module_sel,
+		m_axis_cc_init,
+		m_axis_cc_event,
+		s_axis_cc_rate,
 
 #ifdef DBG_IBV
 		m_axis_dbg_0,

@@ -2461,6 +2461,9 @@ void ib_transport_protocol(
 	stream<ifConnReq>& s_axis_qp_conn_interface,
 	volatile ap_uint<32>& cycle_cnt,
 	volatile ap_uint<8>& cc_module_sel,
+	hls::stream<ccEvent>& m_axis_cc_init,       // external CC modules: INIT events
+	hls::stream<ccEvent>& m_axis_cc_event,      // external CC modules: signals
+	hls::stream<ccExtRateUpd>& s_axis_cc_rate,  // external CC modules: rate updates
 
 	// Debug
 #ifdef DBG_IBV
@@ -3076,7 +3079,10 @@ void ib_transport_protocol(
 		regCcEventDropCount,
 		regCcModuleDropCount,
 		cycle_cnt,
-		cc_module_sel
+		cc_module_sel,
+		m_axis_cc_init,
+		m_axis_cc_event,
+		s_axis_cc_rate
 	);
 
 	msn_table<INSTID>(
@@ -3148,6 +3154,9 @@ template void ib_transport_protocol<DATA_WIDTH, ninst>(		   	\
 	stream<ifConnReq>& s_axis_qp_conn_interface,		        \
 	volatile ap_uint<32>& cycle_cnt,		                    \
 	volatile ap_uint<8>& cc_module_sel,		                    \
+	hls::stream<ccEvent>& m_axis_cc_init,		                    \
+	hls::stream<ccEvent>& m_axis_cc_event,		                    \
+	hls::stream<ccExtRateUpd>& s_axis_cc_rate,		            \
 	stream<psnPkg>& m_axis_dbg_0,		                        \
     stream<psnPkg>& m_axis_dbg_1,		                        \
     stream<psnPkg>& m_axis_dbg_2,		                        \
@@ -3187,6 +3196,9 @@ template void ib_transport_protocol<DATA_WIDTH, ninst>(		   	\
 	stream<ifConnReq>& s_axis_qp_conn_interface,		        \
 	volatile ap_uint<32>& cycle_cnt,		                    \
 	volatile ap_uint<8>& cc_module_sel,		                    \
+	hls::stream<ccEvent>& m_axis_cc_init,		                    \
+	hls::stream<ccEvent>& m_axis_cc_event,		                    \
+	hls::stream<ccExtRateUpd>& s_axis_cc_rate,		            \
 	ap_uint<32>& regInvalidPsnDropCount,		                \
     ap_uint<32>& regRetransCount,		                        \
 	ap_uint<32>& regIbvCountRx,		                       	    \

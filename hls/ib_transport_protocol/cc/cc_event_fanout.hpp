@@ -49,6 +49,8 @@ void cc_event_fanout(
     hls::stream<ccEvent>& cc_event_in,                       // in:  events from cc_signal_table
     hls::stream<ccEvent> mod_cc_init[CC_N_INT_MODULES],      // out: per-module INIT FIFO (blocking)
     hls::stream<ccEvent> mod_cc_event[CC_N_INT_MODULES],     // out: per-module signal FIFO (non-blocking)
+    hls::stream<ccEvent>& ext_cc_init,                       // out: INIT events to the external modules (blocking)
+    hls::stream<ccEvent>& ext_cc_event,                      // out: signals to the external modules (non-blocking)
     volatile ap_uint<8>& cc_module_sel,                      // in:  module select register (CC_MOD_SEL_DEFAULT = build default)
     ap_uint<32>& regCcModuleDropCount                        // out: signals dropped for the ACTIVE module (its FIFO was full)
 ) {
@@ -68,6 +70,7 @@ void cc_event_fanout(
                 #pragma HLS UNROLL
                 mod_cc_init[i].write(ev); // Blocking: INIT must never be lost
             }
+            ext_cc_init.write(ev); // Blocking as well; tied to ready in SV when no external module is built
         } else {
             bool activeDropped = false;
             for (int i = 0; i < CC_N_INT_MODULES; i++) {
@@ -78,6 +81,12 @@ void cc_event_fanout(
                     activeDropped = true;
                 }
                 // Drops of inactive (shadow) modules are not counted
+            }
+            // External modules: one destination (rocev2 port), fanned out again in SV (cc_ext_modules)
+            if (!ext_cc_event.full()) {
+                ext_cc_event.write(ev);
+            } else if (active >= CC_MOD_ID_EXT_FIRST) {
+                activeDropped = true;
             }
             if (activeDropped) {
                 moduleDropCount++;

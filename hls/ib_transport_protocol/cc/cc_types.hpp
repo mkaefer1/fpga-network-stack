@@ -79,7 +79,10 @@ struct ccEvent {
 
 static const uint8_t CC_MOD_ID_DCQCN    = 0;
 static const uint8_t CC_MOD_ID_IDENTITY = 1;
-// 2-15: future internal (HLS) modules, 16+: external modules (phase 4)
+// 2-15: future internal (HLS) modules
+// 16+: external modules (separate IPs behind the rocev2 cc ports, CC_EXT_MODULES)
+static const uint8_t CC_MOD_ID_EXT_FIRST    = 16;
+static const uint8_t CC_MOD_ID_EXT_IDENTITY = 16; // test module, hls/cc_ext/identity
 
 // Module select register (shell CC_MODULE_SEL_REG): this value means "the build default" (CC_DEFAULT_MODULE).
 // It is the reset value, so neither the shell nor software needs to know which module the build defaults to
@@ -101,6 +104,19 @@ struct ccRateUpd {
     ccRateUpd() {}
     ccRateUpd(ap_uint<16> qpn, ap_uint<32> rate_mbps)
         :qpn(qpn), rate_mbps(rate_mbps) {}
+};
+
+/**
+ * Rate update of an external module (port s_axis_cc_rate of rocev2). The module sets its own ID,
+ * so the stack can forward only the active module's updates.
+ */
+struct ccExtRateUpd {
+    ap_uint<8>  module_id;
+    ap_uint<16> qpn;
+    ap_uint<32> rate_mbps;
+    ccExtRateUpd() {}
+    ccExtRateUpd(ap_uint<8> module_id, ap_uint<16> qpn, ap_uint<32> rate_mbps)
+        :module_id(module_id), qpn(qpn), rate_mbps(rate_mbps) {}
 };
 
 // Lowest rate a QP can be throttled to. Also guarantees cc_rate_to_gap never divides by 0

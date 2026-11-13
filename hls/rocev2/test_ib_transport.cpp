@@ -58,6 +58,9 @@ using namespace hls;
     static stream<psnPkg> m_axis_dbg_0_n##ninst;                         \
     static stream<psnPkg> m_axis_dbg_1_n##ninst;                         \
     static stream<psnPkg> m_axis_dbg_2_n##ninst;                         \
+    static stream<ccEvent> m_axis_cc_init_n##ninst;                      \
+    static stream<ccEvent> m_axis_cc_event_n##ninst;                     \
+    static stream<ccExtRateUpd> s_axis_cc_rate_n##ninst;                 \
     ap_uint<32> regInvalidPsnDropCount_n##ninst;                         \
     ap_uint<32> regRetransCount_n##ninst;                                \
     ap_uint<32> regValidIbvCountRx_n##ninst;                             \
@@ -93,6 +96,9 @@ using namespace hls;
         s_axis_qp_conn_interface_n##ninst,          \
         cycle_cnt,                                  \
         cc_module_sel,                              \
+        m_axis_cc_init_n##ninst,                    \
+        m_axis_cc_event_n##ninst,                   \
+        s_axis_cc_rate_n##ninst,                    \
         m_axis_dbg_0_n##ninst,                      \
         m_axis_dbg_1_n##ninst,                      \
         m_axis_dbg_2_n##ninst,                      \
@@ -114,7 +120,10 @@ using namespace hls;
         regCcEventDropCount_n##ninst,                \
         regCcModuleDropCount_n##ninst,               \
         regAckBecnTxCount_n##ninst                   \
-    );
+    );                                              \
+    /* No external CC module in csim: drain its ports */ \
+    while (!m_axis_cc_init_n##ninst.empty()) m_axis_cc_init_n##ninst.read();   \
+    while (!m_axis_cc_event_n##ninst.empty()) m_axis_cc_event_n##ninst.read();
 
 #define SWITCHPORT(port)                                    \
     stream<ipUdpMeta> s_axis_rx_meta_n##port;               \

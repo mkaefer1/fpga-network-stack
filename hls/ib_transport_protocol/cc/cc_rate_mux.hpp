@@ -42,7 +42,8 @@
  */
 template <int INSTID = 0>
 void cc_rate_mux(
-    hls::stream<ccRateUpd> mod_cc_rate_upd[CC_N_INT_MODULES], // in:  rate updates of each module
+    hls::stream<ccRateUpd> mod_cc_rate_upd[CC_N_INT_MODULES], // in:  rate updates of each internal module
+    hls::stream<ccExtRateUpd>& ext_cc_rate_upd,                // in:  rate updates of the external modules (tagged with their ID)
     hls::stream<ccRateUpd>& cc_rate_upd,                       // out: rate updates of the active module
     volatile ap_uint<8>& cc_module_sel                         // in:  module select register (CC_MOD_SEL_DEFAULT = build default)
 ) {
@@ -50,6 +51,8 @@ void cc_rate_mux(
     #pragma HLS INLINE off
 
     ccRateUpd upd;
+    ccExtRateUpd extUpd;
+    bool forwarded = false;
 
     // Read once: every access to the volatile port is a separate read
     ap_uint<8> active = cc_active_module(cc_module_sel);
@@ -60,7 +63,16 @@ void cc_rate_mux(
             mod_cc_rate_upd[i].read(upd);
             if (CC_SLOT_ID[i] == active) {
                 cc_rate_upd.write(upd); // at most one module is active, so at most one write per cycle
+                forwarded = true;
             }
+        }
+    }
+
+    // External modules: drained like the internal ones, forwarded if the update comes from the active module
+    if (!forwarded && !ext_cc_rate_upd.empty()) {
+        ext_cc_rate_upd.read(extUpd);
+        if (extUpd.module_id == active) {
+            cc_rate_upd.write(ccRateUpd(extUpd.qpn, extUpd.rate_mbps));
         }
     }
 }
